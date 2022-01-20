@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 
 	"log"
 
@@ -12,10 +14,14 @@ func resourceServer() *schema.Resource {
 	return &schema.Resource{
 		Create: resourceServerCreate,
 		Read:   resourceServerRead,
-		Update: resourceServerUpdate,
+
 		Delete: resourceServerDelete,
 
 		Schema: map[string]*schema.Schema{
+			"program": &schema.Schema{
+				Type:     schema.TypeString,
+				Required: true,
+			},
 			"command": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
@@ -33,12 +39,14 @@ func resourceServer() *schema.Resource {
 }
 
 func resourceServerCreate(d *schema.ResourceData, m interface{}) error {
+	program := d.Get("program").(string)
 	command := d.Get("command").(string)
 	args := d.Get("arguments").(string)
-	api_key := d.Get("api_key").(string)
-	d.SetId(api_key)
 
-	resp, err := cli(command, args)
+	contract, resp, err := cli("./vast", program, command, args)
+
+	d.SetId(contract)
+
 	if err != "" {
 		log.Print(err)
 	}
@@ -52,11 +60,20 @@ func resourceServerRead(d *schema.ResourceData, m interface{}) error {
 	return nil
 }
 
-func resourceServerUpdate(d *schema.ResourceData, m interface{}) error {
-	return resourceServerRead(d, m)
-}
-
 func resourceServerDelete(d *schema.ResourceData, m interface{}) error {
-	d.SetId("")
-	return nil
+	program := d.Get("program").(string)
+	command := "destroy instance"
+	args := d.Id()
+
+	contract, resp, err := cli("./vast", program, command, args)
+
+	if strings.Contains(resp, "destroying") {
+		fmt.Print("Contract: " + contract + "terminated")
+		d.SetId("")
+		return nil
+	} else {
+		//an error occured
+		return errors.New(err)
+	}
+
 }

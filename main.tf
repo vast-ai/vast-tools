@@ -1,5 +1,6 @@
 resource "example_server" "my-server-name" {
-	command = "/.vast"
-    arguments = "search"
-    api_key = "API_KEY_HERE"
+	command = "create instance"
+    program = "./vast"
+    arguments = "instance ID Here"
+    api_key = API_KEY
 }
