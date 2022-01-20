@@ -39,6 +39,34 @@ func cli(path string, program string, command string, args string) (string, stri
 
 	return contractNum, string(out), err.Error()
 }
+func cliAuth(path string, program string, command string, args string, api_key string) (string, string) {
+
+	argArr := strings.Split(args, " ")
+
+	fullCmd := []string{program, command}
+
+	fullCmd = append(fullCmd, argArr...)
+
+	fullCmd = append(fullCmd, api_key)
+
+	cmd := exec.Cmd{
+		Path: path,
+		Args: fullCmd,
+	}
+
+	//for _, str := range cmd.Args {
+	//	fmt.Printf("* %s\n", str)
+	//}
+
+	out, err := cmd.CombinedOutput()
+	if cmd.Stderr != nil {
+		log.Print(cmd.Stderr)
+	}
+
+	resp := string(out)
+
+	return resp, err.Error()
+}
 func prependstring(x []string, y string) []string {
 	x = append(x, y)
 	copy(x[1:], x)
