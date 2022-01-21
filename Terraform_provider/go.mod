@@ -1,4 +1,4 @@
-module tf-custom-provider
+module vast-tools/Terraform_provider
 
 go 1.17
 
