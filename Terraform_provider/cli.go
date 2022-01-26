@@ -47,8 +47,6 @@ func cliAuth(path string, program string, command string, args string, api_key s
 
 	fullCmd = append(fullCmd, argArr...)
 
-	fullCmd = append(fullCmd, api_key)
-
 	cmd := exec.Cmd{
 		Path: path,
 		Args: fullCmd,
@@ -66,6 +64,33 @@ func cliAuth(path string, program string, command string, args string, api_key s
 	resp := string(out)
 
 	return resp, err.Error()
+}
+func cliSearch(path string, program string, command string, args string) (string, string) {
+
+	argArr := strings.Split(args, " ")
+
+	fullCmd := []string{program, command}
+
+	fullCmd = append(fullCmd, argArr...)
+
+	cmd := exec.Cmd{
+		Path: path,
+		Args: fullCmd,
+	}
+
+	out, err := cmd.CombinedOutput()
+	if cmd.Stderr != nil {
+		log.Print(cmd.Stderr)
+	}
+
+	resp := string(out)
+
+	index := strings.Index(resp, "machine_id")
+
+	machine_id := substr(resp, index+12, 7)
+
+	fmt.Print("contract number: " + machine_id)
+	return machine_id, err.Error()
 }
 func prependstring(x []string, y string) []string {
 	x = append(x, y)

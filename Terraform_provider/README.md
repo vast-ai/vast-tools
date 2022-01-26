@@ -1,6 +1,7 @@
 # vast-tools
 Vast-ai public repository for open sourced tools, plugins, etc.
 Initial setup
+install terraform
 install go
 navigate to project folder in terminal
 run go mod init
