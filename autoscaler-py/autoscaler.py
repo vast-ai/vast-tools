@@ -3,20 +3,35 @@ from threading import Thread, Lock, Event
 import time
 import re
 import json
+import os
 
 TIME_INTERVAL_SECONDS = 10
-UNKNOWN_TOKENS_PER_SECOND = 1.0
-MAX_COST_PER_HOUR = 3.0
+MAX_COST_PER_HOUR = 10.0
 
 ####################################### INSTANCE ACCESS HELPERS #######################################
+#could be called on the output from 'show instance' or 'search offers'
+def tps(instance):
+	if "tokens/s" in instance.keys():
+		return instance["tokens/s"]
+	filepath = f"instance_info/{instance['machine_id']}.json"
+	if os.path.exists(filepath):
+		with open(filepath, "r") as f:
+			instance_log = json.load(f)
+			if "tokens/s" in instance_log.keys():
+				return instance_log["tokens/s"]
+	return 0.0
+
 def expected_performance(instance): #could be made more sophisticated, change to cost per token
 	return float(instance['dlperf_per_dphtotal']) if instance['dlperf_per_dphtotal'] is not None else 0
+
 def get_instance_id(instance):
 	return instance["id"]
 
 ####################################### MAIN CLASSES ##################################################
 class SimpleStrategy:
 	def __init__(self):
+		self.start_num_hot = 10
+
 		self.target_hot_busy_ratio_upper = 0.9
 		self.target_hot_busy_ratio_lower = 0.6
 		self.target_hot_ratio = 0.3
@@ -50,15 +65,14 @@ class InstanceSet:
 		self.started_instance_ids = []
 		self.bad_instance_ids = []
 
+		self.initial = True
+
 		self.strat = SimpleStrategy()
 		self.metrics = InstanceSetMetrics()
 
 		self.lock = Lock()
 
 		self.update_instance_info()
-		# num_to_start = max(0, self.init_num_ready - len(self.ready_instances))
-		# print("[autoscaler] num_to_start: {}".format(num_to_start))
-		# self.create_instances(num_to_start)
 
 		self.exit_event = Event()
 		self.manage = manage
@@ -92,8 +106,8 @@ class InstanceSet:
 
 		if tps is not None:
 			instance["tokens/s"] = tps
-		else:
-			instance["tokens/s"] = UNKNOWN_TOKENS_PER_SECOND
+			with open(f"instance_info/{instance['machine_id']}.json", "w") as f:
+				json.dump(instance, f)
 
 	#gets marks instances that are stopped and unable to be started again
 	def tick_duration(self):
@@ -113,16 +127,22 @@ class InstanceSet:
 		self.metrics.lock.acquire()
 
 		curr_cost_per_hour = 0.0
-		total_instance_cost = 0.0
-		total_inet_cost = 0.0
+		total_add_cost = 0.0
 		for instance in self.hot_instances:
 			curr_cost_per_hour += instance["dph_total"]
-			total_instance_cost += (instance["dph_total"] * (instance["duration"] / (60 * 60)))
-			total_inet_cost += instance["inet_down_cost"]
-			total_inet_cost += instance["inet_up_cost"]
+			new_instance_cost = instance["dph_total"] * (instance["duration"] / (60 * 60))
+			new_inet_cost = instance["inet_up_cost"] + instance["inet_down_cost"]
+			new_cost = new_instance_cost + new_inet_cost
+			if "prev_cost" in instance.keys():
+				add_cost = new_cost - instance["prev_cost"]
+			else:
+				add_cost = new_cost
+			instance["prev_cost"] = new_cost
+			total_add_cost += add_cost
 
 		self.metrics.curr_cost_per_hour = curr_cost_per_hour
-		self.metrics.total_cost = total_instance_cost + total_inet_cost
+		self.metrics.total_cost += total_add_cost
+
 		self.metrics.lock.release()
 		self.lock.release()
 
@@ -137,6 +157,7 @@ class InstanceSet:
 
 	def update_and_manage_background(self, event, manage=True):
 		while not event.is_set():
+			print("[autoscaler] ticking")
 			self.update_instance_info()
 			self.tick_duration()
 			if manage:
@@ -165,8 +186,8 @@ class InstanceSet:
 			else:
 				print("[autoscaler] instance id: {} has unidentified status: {}".format(instance['id'], instance['actual_status']))
 
-		hot_instances.sort(key=expected_performance, reverse=True)
-		cold_instances.sort(key=expected_performance, reverse=True)
+		hot_instances.sort(key=tps, reverse=True)
+		cold_instances.sort(key=tps, reverse=True)
 
 		self.lock.acquire()
 		self.hot_instances = hot_instances
@@ -183,7 +204,6 @@ class InstanceSet:
 		host = instance["ssh_host"]
 		result = subprocess.run(["ssh", "-p", port_num, "-o", "StrictHostKeyChecking=no", "root@{}".format(host), "grep 'Starting API at http://0.0.0.0:5000/api' /app/onstart.log | tail -n 1"], capture_output=True)
 		out = result.stdout
-		# print("id: {} ready string: {}".format(instance["id"], out.decode('utf-8')))
 		if out is not None and "Starting API at http://0.0.0.0:5000/api" in out.decode('utf-8'):
 			instance["ready"] = True
 		else:
@@ -227,7 +247,6 @@ class InstanceSet:
 			self.busy_instance_ids.append(busy_id)
 		self.lock.release()
 
-
 	def manage_instances(self):
 		self.lock.acquire()
 
@@ -245,6 +264,16 @@ class InstanceSet:
 		self.bad_instance_ids = []
 
 		ask_list = self.get_asks(budget=True)
+
+		if self.initial and num_hot == 0:
+			cold_idx = 0
+			while cold_idx < self.strat.start_num_hot and cold_idx < len(self.cold_instances):
+				new_id = self.cold_instances[cold_idx]['id']
+				self.start_instance(new_id) #could check return value from this
+				cold_idx += 1
+			self.initial = False
+			self.lock.release()
+			return
 
 		#start and stop instances
 		if (hot_busy_ratio > self.strat.target_hot_busy_ratio_upper) and (len(self.cold_instances) != 0):
@@ -305,7 +334,7 @@ class InstanceSet:
 		return curr_instances
 
 	def get_asks(self, budget=True):
-		order = "dph" if budget else "dlperf_per_dphtotal"
+		order = "dph" if budget else "dlperf_per_dphtotal" #could also sort by network speed?
 		obga_args = ["gpu_ram > 10.0", "disk_space > 80", "dph <= {}".format(self.strat.price_limit), "-o", order] #how can I filter out bad gpu compatability?
 		result = subprocess.run(["vastai", "search", "offers"] + obga_args + ["--raw"], capture_output=True)
 		listed_instances = result.stdout.decode('utf-8')
@@ -346,12 +375,14 @@ class InstanceSet:
 		print("creating instance {}".format(instance_id))
 		obga_args = ["--onstart", "onstart_OOBA.sh", "--image", "atinoda/text-generation-webui:default-nightly"]
 		result = subprocess.run(["vastai", "create", "instance", str(instance_id)] + obga_args + ["--raw"], capture_output=True) #will add more fields as necessary
-		response = json.loads(result.stdout.decode('utf-8'))
-		if response["success"]:
-			new_id = response["new_contract"]
-			return new_id
-		else:
-			return None
+		if result is not None and result.stdout.decode('utf-8') is not None:
+			try:
+				response = json.loads(result.stdout.decode('utf-8'))
+				if response["success"]:
+					new_id = response["new_contract"]
+					return new_id
+			except json.decoder.JSONDecodeError:
+				pass
 
 	def destroy_all_instances(self):
 		for instance in (self.hot_instances + self.cold_instances + self.loading_instances):

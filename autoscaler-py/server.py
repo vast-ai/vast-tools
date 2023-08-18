@@ -53,7 +53,7 @@ def get_server_metrics():
 @app.route('/status', methods=['GET'])
 def get_server_status():
     global lb
-    return {"num_ready" : len(lb.ready_queue), "num_cold" : len(lb.instance_set.cold_instances), "num_loading" : len(lb.instance_set.loading_instances), "num_hot" : len(lb.instance_set.hot_instances)}
+    return {"num_hot" : len(lb.ready_queue), "num_cold" : len(lb.instance_set.cold_instances), "num_image_loading" : len(lb.instance_set.loading_instances), "num_model_loading" : len(lb.instance_set.hot_instances) - len(lb.ready_queue)}
 
 
 

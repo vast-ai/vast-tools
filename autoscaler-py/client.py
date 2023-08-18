@@ -126,6 +126,7 @@ class Client:
 			print("[client] load balancer server shutdown failed")
 
 	def send_prompt(self, text_prompt, num_tokens, request_num):
+		print("[client] sending prompt")
 		request_dict = {"num_tokens" : num_tokens}
 		URI = f'http://{self.lb_server_addr}/connect'
 		try:
@@ -185,28 +186,35 @@ class Client:
 			response = response.json()
 			return response
 
-	def wait_for_ready(self):
-		num_ready = 0
-		while num_ready == 0:
+	def wait_for_hot(self):
+		num_hot = 0
+		while num_hot == 0:
+			print("[client] server not yet ready")
 			time.sleep(WAIT_INTERVAL)
-			num_ready = self.get_status()["num_ready"]
-			print("[client] server still not ready")
+			num_hot = self.get_status()["num_hot"]
+		print("[client] server now ready")
 
 	def create_cold_set(self, cold_set_size):
 		self.init_cold_set(cold_set_size)
 		num_cold = 0
+		iters = 0
 		while num_cold < cold_set_size:
 			time.sleep(WAIT_INTERVAL)
 			status = self.get_status()
 			if status:
+				print("[client] status update:")
 				for k, v in status.items():
 					print(f"{k} : {v}")
 				num_cold = status["num_cold"]
+			if iters % 5 == 0:
+				self.get_metrics()
+				print(f"current cost: {self.metrics.total_cost}")
+			iters += 1
 		self.shutdown_lb()
 
 def main():
 	c = Client()
-	c.create_cold_set(10)
+	c.create_cold_set(50)
 
 if __name__ == "__main__":
 	main()

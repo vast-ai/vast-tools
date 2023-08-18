@@ -7,6 +7,7 @@ from autoscaler import InstanceSet
 
 TIME_INTERVAL_SECONDS = 5
 BUSY_LOAD_THRESHOLD = 10.0
+DEFAULT_TPS = 10.0
 
 class LoadBalancer:
 	def __init__(self, cold_set_size=0, manage=True):
@@ -87,7 +88,12 @@ class LoadBalancer:
 		if len(self.ready_queue) != 0:
 			(_, _, ready_server) = heapq.heappop(self.ready_queue)
 			addr = self.get_address(ready_server)
-			self.queue_duration[ready_server["id"]] += ((1 / ready_server["tokens/s"]) * num_tokens)
+			if "tokens/s" in ready_server.keys():
+				tps = ready_server["tokens/s"]
+			else:
+				tps = DEFAULT_TPS
+
+			self.queue_duration[ready_server["id"]] += ((1 / tps) * num_tokens)
 			#could check here to see if a server is being overloaded
 			# if self.queue_duration[ready_server["id"]] > BUSY_LOAD_THRESHOLD:
 			# 	self.instance_set.report_busy(ready_server["id"])

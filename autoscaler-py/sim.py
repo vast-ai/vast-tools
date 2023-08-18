@@ -35,6 +35,7 @@ class Sim:
             self.users.append(User(random.gauss(mu=base_task_prob, sigma=0.1)))
 
     def update(self):
+        print("[sim] updating")
         choices = [True, False]
         for user in self.users:
             probs = [user.task_prob, 1 - user.task_prob]
@@ -60,7 +61,7 @@ class Sim:
 
     def run(self):
         self.client.setup_lb()
-        self.client.wait_for_ready()
+        self.client.wait_for_hot()
         for i in range(self.num_iters):
             self.init_users(self.base_num_users + (i // 2), self.base_task_prob)
             self.update()
@@ -73,7 +74,7 @@ class Sim:
         self.deconstruct()
 
 def main():
-    sim = Sim(num_iters=10, base_num_users=3, base_task_prob=0.5)
+    sim = Sim(num_iters=10, base_num_users=6, base_task_prob=0.5)
     sim.run()
 
 if __name__ == "__main__":
