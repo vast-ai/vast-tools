@@ -1,0 +1,1 @@
+env | grep _ >> /etc/environment; pip install accelerate -U; pip install protobuf; cd /src; /scripts/docker-entrypoint.sh python3 /app/download-model.py TheBloke/Llama-2-13B-chat-GPTQ --branch gptq-4bit-32g-actorder_True; python3 /app/server.py --extensions api --model TheBloke_Llama-2-13B-chat-GPTQ_gptq-4bit-32g-actorder_True --loader exllama --listen;

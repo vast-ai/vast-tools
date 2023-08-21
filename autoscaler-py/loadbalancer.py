@@ -6,8 +6,8 @@ import time
 from autoscaler import InstanceSet
 
 TIME_INTERVAL_SECONDS = 5
-BUSY_LOAD_THRESHOLD = 10.0
-DEFAULT_TPS = 10.0
+FULL_LOAD_THRESHOLD = 2.5
+DEFAULT_TPS = 35.0
 
 class LoadBalancer:
 	def __init__(self, cold_set_size=0, manage=True):
@@ -52,7 +52,7 @@ class LoadBalancer:
 
 	def tick_duration(self):
 		self.lock.acquire()
-		busy_ids = []
+		tot_duration = 0
 		num_ready = 0
 		ready_ids = []
 		for (_, _, instance) in list(self.ready_queue):
@@ -62,13 +62,17 @@ class LoadBalancer:
 			self.queue_duration[instance['id']] = curr_queue_duration
 			if instance["id"] in self.old_ready_ids:
 				num_ready += 1
-				if curr_queue_duration >= BUSY_LOAD_THRESHOLD:
-					busy_ids.append(instance['id'])
-			# print("[loadbalancer] instance: {} has queue duration: {}".format(instance['id'], curr_queue_duration))
+			tot_duration += curr_queue_duration
+			print("[loadbalancer] instance: {} has queue duration: {}".format(instance['id'], curr_queue_duration))
+
+		num_soon_ready = len(self.ready_queue)
+		avg_duration = tot_duration / num_soon_ready if num_soon_ready != 0 else 0
+		busy_level = avg_duration / FULL_LOAD_THRESHOLD
+		num_busy = int(busy_level * num_ready)
 
 		self.old_ready_ids = ready_ids
 		self.instance_set.lock.acquire()
-		self.instance_set.busy_instance_ids = busy_ids
+		self.instance_set.num_busy = num_busy
 		self.instance_set.num_hot = num_ready
 		self.instance_set.lock.release()
 		self.lock.release()
@@ -88,15 +92,12 @@ class LoadBalancer:
 		if len(self.ready_queue) != 0:
 			(_, _, ready_server) = heapq.heappop(self.ready_queue)
 			addr = self.get_address(ready_server)
-			if "tokens/s" in ready_server.keys():
-				tps = ready_server["tokens/s"]
-			else:
-				tps = DEFAULT_TPS
-
+			# if "tokens/s" in ready_server.keys():
+			# 	tps = ready_server["tokens/s"]
+			# else:
+			# 	tps = DEFAULT_TPS
+			tps = DEFAULT_TPS
 			self.queue_duration[ready_server["id"]] += ((1 / tps) * num_tokens)
-			#could check here to see if a server is being overloaded
-			# if self.queue_duration[ready_server["id"]] > BUSY_LOAD_THRESHOLD:
-			# 	self.instance_set.report_busy(ready_server["id"])
 			heapq.heappush(self.ready_queue, (self.queue_duration[ready_server["id"]], ready_server["id"], ready_server))
 		self.lock.release()
 		print("[loadbalancer] next addr is: {}".format(addr))

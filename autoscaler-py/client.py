@@ -126,7 +126,7 @@ class Client:
 			print("[client] load balancer server shutdown failed")
 
 	def send_prompt(self, text_prompt, num_tokens, request_num):
-		print("[client] sending prompt")
+		# print("[client] sending prompt")
 		request_dict = {"num_tokens" : num_tokens}
 		URI = f'http://{self.lb_server_addr}/connect'
 		try:
@@ -146,6 +146,7 @@ class Client:
 
 			start_time = time.time()
 			gpu_response = format_prompt_request(gpu_server_addr, text_prompt, num_tokens)
+			# print(gpu_response)
 			end_time = time.time()
 			print("[client] request num: {} using address: {} returned, success: {}".format(request_num, gpu_server_addr, gpu_response is not None))
 			time_elapsed = end_time - start_time
@@ -212,9 +213,9 @@ class Client:
 			iters += 1
 		self.shutdown_lb()
 
-def main():
-	c = Client()
-	c.create_cold_set(50)
+# def main():
+# 	c = Client()
+# 	c.create_cold_set(2)
 
-if __name__ == "__main__":
-	main()
+# if __name__ == "__main__":
+# 	main()

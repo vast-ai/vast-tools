@@ -1,0 +1,24 @@
+{
+    "70": {
+        "get": {
+            "gpu_ram" : 40.0,
+            "disk_space" : 80.0
+        },
+        "create": {
+            "onstart" : "onstart_OOBA_70B.sh",
+            "image" : "atinoda/text-generation-webui:default-nightly",
+            "disk" : "80.0"
+        }
+    },
+    "13": {
+        "get": {
+            "gpu_ram" : 10.0,
+            "disk_space" : 10.0
+        },
+        "create": {
+            "onstart" : "onstart_OOBA_13B.sh",
+            "image" : "atinoda/text-generation-webui:default-nightly",
+            "disk" : "10.0"
+        }
+    }
+}

@@ -4,21 +4,25 @@ import time
 import re
 import json
 import os
+from ratio_manager import update_rolling_average
 
 TIME_INTERVAL_SECONDS = 10
 MAX_COST_PER_HOUR = 10.0
+INSTANCE_CONFIG_NAME = "OOBA_configs.json"
+IGNORE_INSTANCE_IDS = ["6802321"]
 
 ####################################### INSTANCE ACCESS HELPERS #######################################
 #could be called on the output from 'show instance' or 'search offers'
 def tps(instance):
+	# print(instance['machine_id'])
 	if "tokens/s" in instance.keys():
 		return instance["tokens/s"]
-	filepath = f"instance_info/{instance['machine_id']}.json"
-	if os.path.exists(filepath):
-		with open(filepath, "r") as f:
-			instance_log = json.load(f)
-			if "tokens/s" in instance_log.keys():
-				return instance_log["tokens/s"]
+	# filepath = f"instance_info/{instance['machine_id']}.json"
+	# if os.path.exists(filepath):
+	# 	with open(filepath, "r") as f:
+	# 		instance_log = json.load(f)
+	# 		if "tokens/s" in instance_log.keys():
+	# 			return instance_log["tokens/s"]
 	return 0.0
 
 def expected_performance(instance): #could be made more sophisticated, change to cost per token
@@ -29,14 +33,17 @@ def get_instance_id(instance):
 
 ####################################### MAIN CLASSES ##################################################
 class SimpleStrategy:
-	def __init__(self):
+	def __init__(self, avg_num_hot=0):
 		self.start_num_hot = 10
 
 		self.target_hot_busy_ratio_upper = 0.9
 		self.target_hot_busy_ratio_lower = 0.6
 		self.target_hot_ratio = 0.3
 
-		self.price_limit = 0.3
+		self.avg_num_busy = 0
+		self.avg_num_hot = avg_num_hot
+
+		# self.price_limit = 0.3
 
 class InstanceSetMetrics: #Represents metrics that the client would have available to them, not the backend autoscaler
 	def __init__(self):
@@ -56,23 +63,29 @@ class InstanceSetMetrics: #Represents metrics that the client would have availab
 class InstanceSet:
 	def __init__(self, cold_set_size=0, manage=True):
 		self.num_hot = 0
+		self.num_busy = 0
 		self.ready_instances = []
 		self.hot_instances = []
 		self.loading_instances = []
 		self.cold_instances = [] #assumption is that all cold instances are available to be started
 
-		self.busy_instance_ids = []
 		self.started_instance_ids = []
 		self.bad_instance_ids = []
+		self.ignore_instance_ids = IGNORE_INSTANCE_IDS
+
+		self.cost_dict = {}
 
 		self.initial = True
 
-		self.strat = SimpleStrategy()
 		self.metrics = InstanceSetMetrics()
 
 		self.lock = Lock()
 
 		self.update_instance_info()
+		self.strat = SimpleStrategy(avg_num_hot=len(self.hot_instances) + len(self.loading_instances) + len(self.cold_instances))
+
+		with open(INSTANCE_CONFIG_NAME, "r") as f:
+			self.instance_config = json.load(f)
 
 		self.exit_event = Event()
 		self.manage = manage
@@ -83,7 +96,6 @@ class InstanceSet:
 			self.p2 = Thread(target=self.create_cold_set, args=(self.exit_event, cold_set_size,))
 			self.p2.start()
 
-
 	def deconstruct(self):
 		print("[autoscaler] deconstructing")
 		self.exit_event.set()
@@ -91,7 +103,7 @@ class InstanceSet:
 		if self.cold_set_size > 0:
 			self.p2.join()
 
-	def update_tokens_per_second(self, instance):
+	def update_tokens_per_second(self, instance): #need lock here?
 		port_num = str(instance["ssh_port"])
 		host = instance["ssh_host"]
 		result = subprocess.run(["ssh", "-p", port_num, "-o", "StrictHostKeyChecking=no", "root@{}".format(host), "grep 'Output generated' /app/onstart.log | tail -n 1"], capture_output=True)
@@ -110,17 +122,17 @@ class InstanceSet:
 				json.dump(instance, f)
 
 	#gets marks instances that are stopped and unable to be started again
-	def tick_duration(self):
-		bad_instance_ids = []
-		for instance_id in self.started_instance_ids:
-			for cold_instance in self.cold_instances:
-				if instance_id == cold_instance["id"]:
-					bad_instance_ids.append(instance_id)
-					self.cold_instances.remove(cold_instance)
-					break
+	# def tick_duration(self):
+	# 	bad_instance_ids = []
+	# 	for instance_id in self.started_instance_ids:
+	# 		for cold_instance in self.cold_instances:
+	# 			if instance_id == cold_instance["id"]:
+	# 				bad_instance_ids.append(instance_id)
+	# 				self.cold_instances.remove(cold_instance)
+	# 				break
 
-		self.bad_instance_ids += bad_instance_ids
-		self.started_instance_ids = []
+	# 	self.bad_instance_ids += bad_instance_ids
+	# 	self.started_instance_ids = []
 
 	def update_costs(self):
 		self.lock.acquire()
@@ -133,11 +145,12 @@ class InstanceSet:
 			new_instance_cost = instance["dph_total"] * (instance["duration"] / (60 * 60))
 			new_inet_cost = instance["inet_up_cost"] + instance["inet_down_cost"]
 			new_cost = new_instance_cost + new_inet_cost
-			if "prev_cost" in instance.keys():
-				add_cost = new_cost - instance["prev_cost"]
+			if instance["id"] in self.cost_dict.keys():
+				add_cost = new_cost - self.cost_dict[instance["id"]]
 			else:
 				add_cost = new_cost
-			instance["prev_cost"] = new_cost
+
+			self.cost_dict[instance["id"]] = new_cost
 			total_add_cost += add_cost
 
 		self.metrics.curr_cost_per_hour = curr_cost_per_hour
@@ -159,7 +172,7 @@ class InstanceSet:
 		while not event.is_set():
 			print("[autoscaler] ticking")
 			self.update_instance_info()
-			self.tick_duration()
+			# self.tick_duration()
 			if manage:
 				self.manage_instances()
 			self.update_instance_info() #for cost check for newly started instances
@@ -175,14 +188,14 @@ class InstanceSet:
 		loading_instances = []
 
 		for instance in curr_instances:
-			if instance['actual_status'] == 'running':
+			if instance['actual_status'] == 'offline' or (instance['status_msg'] is not None and 'Error response from daemon' in instance['status_msg']):
+				self.bad_instance_ids.append(instance['id'])
+			elif instance['actual_status'] == 'running':
 				hot_instances.append(instance)
 			elif instance['actual_status'] == 'loading' or instance['actual_status'] == None or (instance['actual_status'] == 'created' and instance['intended_status'] == 'running'):
 				loading_instances.append(instance)
 			elif (instance['actual_status'] == 'created' and instance['intended_status'] == 'stopped') or instance['actual_status'] == 'stopping' or instance['actual_status'] == 'exited':
 				cold_instances.append(instance)
-			elif instance['actual_status'] == 'offline':
-				self.bad_instance_ids.append(instance['id'])
 			else:
 				print("[autoscaler] instance id: {} has unidentified status: {}".format(instance['id'], instance['actual_status']))
 
@@ -239,25 +252,31 @@ class InstanceSet:
 
 		self.lock.release()
 
-	#called by loadbalancer
-	def report_busy(self, busy_id):
-		self.lock.acquire()
-		if busy_id not in self.busy_instance_ids:
-			print("[autoscaler] new busy id: {}".format(busy_id))
-			self.busy_instance_ids.append(busy_id)
-		self.lock.release()
-
 	def manage_instances(self):
 		self.lock.acquire()
 
-		num_hot_busy = len(self.busy_instance_ids)
-		num_hot = self.num_hot
-		num_tot = len(self.hot_instances) + len(self.cold_instances) + len(self.loading_instances)
+		if self.num_busy > self.strat.avg_num_busy:
+			num_hot_busy = self.num_busy
+		else:
+			num_hot_busy = update_rolling_average(self.strat.avg_num_busy, self.num_busy, TIME_INTERVAL_SECONDS, 0.01)
+		self.strat.avg_num_busy = num_hot_busy
+
+		num_starting = 0 #might want to keep this as a rolling tally
+		num_hot = self.num_hot + num_starting
+		num_model_loading = len(self.hot_instances) - num_hot
+		num_loading = len(self.loading_instances) + num_model_loading
+
+		num_cold = len(self.cold_instances) + num_loading
+		num_tot = num_hot + num_cold
 
 		hot_busy_ratio = (num_hot_busy + 1) / (num_hot + 1)
 		hot_ratio = (num_hot + 1) / (num_tot + 0.1)
 
-		print("[autoscaler] managing instances, hot_ratio: {}, hot_busy_ratio: {}, num_hot: {}, num_busy: {}, num_cold: {}, num_total: {}".format(hot_ratio, hot_busy_ratio, num_hot, num_hot_busy, len(self.cold_instances), num_tot))
+		num_hot_rolling = update_rolling_average(self.strat.avg_num_hot, num_hot, TIME_INTERVAL_SECONDS, 0.01)
+		self.strat.avg_num_hot = num_hot_rolling
+		hot_ratio_rolling = (num_hot_rolling + 1) / (num_tot + 0.1)
+
+		print("[autoscaler] managing instances: hot_busy_ratio: {}, hot_ratio: {}, hot_ratio_rolling: {}, num_hot: {}, num_busy: {}, num_cold_ready: {}, num_loading: {}, num_total: {}".format(hot_busy_ratio, hot_ratio, hot_ratio_rolling, num_hot, num_hot_busy, len(self.cold_instances), num_loading, num_tot))
 		for instance_id in self.bad_instance_ids:
 			print("[autoscaler] destroying bad instance: {}".format(instance_id))
 			self.destroy_instance(instance_id)
@@ -265,32 +284,21 @@ class InstanceSet:
 
 		ask_list = self.get_asks(budget=True)
 
-		if self.initial and num_hot == 0:
-			cold_idx = 0
-			while cold_idx < self.strat.start_num_hot and cold_idx < len(self.cold_instances):
-				new_id = self.cold_instances[cold_idx]['id']
-				self.start_instance(new_id) #could check return value from this
-				cold_idx += 1
-			self.initial = False
-			self.lock.release()
-			return
-
 		#start and stop instances
 		if (hot_busy_ratio > self.strat.target_hot_busy_ratio_upper) and (len(self.cold_instances) != 0):
 			print("[autoscaler] hot busy ratio too high!")
 			cold_idx = 0
 			while hot_busy_ratio > self.strat.target_hot_busy_ratio_upper and cold_idx < len(self.cold_instances):
-				print("[autoscaler] cold_idx: {}, hot_busy_ratio: {}".format(cold_idx, hot_busy_ratio))
 				new_id = self.cold_instances[cold_idx]['id']
-				self.start_instance(new_id) #could check return value from this
-				num_hot += 1
-				hot_busy_ratio = (num_hot_busy + 1) / (num_hot + 1)
 				cold_idx += 1
+				if self.start_instance(new_id):
+					num_hot += 1
+					hot_busy_ratio = (num_hot_busy + 1) / (num_hot + 1)
+
 		elif hot_busy_ratio < self.strat.target_hot_busy_ratio_lower:
 			print("[autoscaler] hot busy ratio too low!")
 			hot_idx = len(self.hot_instances) - 1
 			while hot_busy_ratio < self.strat.target_hot_busy_ratio_lower and hot_idx >= 0 and (len(self.hot_instances) != 0):
-				print("[autoscaler] hot_idx: {}, hot_busy_ratio: {}".format(hot_idx, hot_busy_ratio))
 				self.stop_instance(self.hot_instances[hot_idx]['id'])
 				num_hot -= 1
 				hot_busy_ratio = (num_hot_busy + 1) / (num_hot + 1)
@@ -301,19 +309,17 @@ class InstanceSet:
 			print("[autoscaler] hot ratio too high!")
 			ask_idx = 0
 			while hot_ratio > self.strat.target_hot_ratio and ask_idx < len(ask_list) - 1:
-				print("[autoscaler] ask_idx: {}, hot_ratio: {}".format(ask_idx, hot_ratio))
-				self.create_instance(ask_list[ask_idx]['id']) #but when we create an instance, it will go straight to being hot after a while, so this doesn't seem to really be helping the hot ratio long-term
+				self.create_instance(ask_list[ask_idx]['id'])
 				num_tot += 1
 				hot_ratio = (num_hot + 1) / (num_tot + 1)
 				ask_idx += 1
-		elif hot_ratio < self.strat.target_hot_ratio:
+		elif hot_ratio_rolling < self.strat.target_hot_ratio:
 			print("[autoscaler] hot ratio too low!")
 			cold_idx = len(self.cold_instances) - 1
-			while hot_ratio < self.strat.target_hot_ratio and cold_idx >= 0 and (len(self.cold_instances) != 0):
-				print("[autoscaler] cold_idx: {}, hot_ratio: {}".format(cold_idx, hot_ratio))
-				self.destroy_instance(self.cold_instances[cold_idx]['id'])
+			while hot_ratio_rolling < self.strat.target_hot_ratio and cold_idx >= 0 and (len(self.cold_instances) != 0):
+				self.destroy_instance(self.cold_instances[cold_idx]['id']) #need to allow loading instances to be destroyed here because they are also considered cold
 				num_tot -= 1
-				hot_ratio = (num_hot + 1) / (num_tot + 1)
+				hot_ratio_rolling = (num_hot_rolling + 1) / (num_tot + 1)
 				cold_idx -= 1
 
 		self.lock.release()
@@ -333,10 +339,11 @@ class InstanceSet:
 
 		return curr_instances
 
-	def get_asks(self, budget=True):
+	def get_asks(self, model="13", budget=True):
+		config = self.instance_config[model]["get"]
 		order = "dph" if budget else "dlperf_per_dphtotal" #could also sort by network speed?
-		obga_args = ["gpu_ram > 10.0", "disk_space > 80", "dph <= {}".format(self.strat.price_limit), "-o", order] #how can I filter out bad gpu compatability?
-		result = subprocess.run(["vastai", "search", "offers"] + obga_args + ["--raw"], capture_output=True)
+		args = f"'gpu_ram >= {config['gpu_ram']} disk_space >= {config['disk_space']}' -o '{order}'"
+		result = subprocess.run(["vastai search offers " + args + " --raw"], shell=True, capture_output=True)
 		listed_instances = result.stdout.decode('utf-8')
 		if listed_instances:
 			ask_list = json.loads(listed_instances)
@@ -345,7 +352,7 @@ class InstanceSet:
 			return None
 
 	def create_cold_set(self, event, num_instances):
-		self.create_instances(num_instances)
+		self.create_instances(num_instances, model="13")
 		while not event.is_set():
 			for ready_instance in self.ready_instances:
 				self.stop_instance(ready_instance['id'])
@@ -353,28 +360,37 @@ class InstanceSet:
 			time.sleep(TIME_INTERVAL_SECONDS)
 		print("[autoscaler] done creating cold set")
 
-	def create_instances(self, num_instances):
-		ask_list_iter = iter(self.get_asks())
+	def create_instances(self, num_instances, model="13"):
+		ask_list = self.get_asks(model=model)
+		print(ask_list[:2])
+		ask_list_iter = iter(ask_list)
 		for _ in range(num_instances):
-			self.create_instance(next(ask_list_iter)['id'])
+			self.create_instance(next(ask_list_iter)['id'], model)
 
 	def start_instance(self, instance_id: float):
+		if instance_id in self.ignore_instance_ids:
+			return
 		print("starting instance: {}".format(instance_id))
 		result = subprocess.run(["vastai", "start", "instance", str(instance_id), "--raw"], capture_output=True)
-		response = result.stdout.decode('utf-8')
-		print(response)
-		self.started_instance_ids.append(instance_id)
+		if "starting instance" in result.stdout.decode('utf-8'):
+			return True
+		else:
+			print(result.stdout.decode('utf-8'))
+			return False
 
 	def stop_instance(self, instance_id: float):
+		if instance_id in self.ignore_instance_ids:
+			return
 		print("stopping instance {}".format(instance_id))
 		result = subprocess.run(["vastai", "stop", "instance", str(instance_id), "--raw"], capture_output=True)
 		response = result.stdout.decode('utf-8')
 		print(response)
 
-	def create_instance(self, instance_id: float):
+	def create_instance(self, instance_id: float, model="13"):
+		config = self.instance_config[model]["create"]
 		print("creating instance {}".format(instance_id))
-		obga_args = ["--onstart", "onstart_OOBA.sh", "--image", "atinoda/text-generation-webui:default-nightly"]
-		result = subprocess.run(["vastai", "create", "instance", str(instance_id)] + obga_args + ["--raw"], capture_output=True) #will add more fields as necessary
+		args = f" --onstart {config['onstart']} --image {config['image']} --disk {config['disk']}"
+		result = subprocess.run([f"vastai create instance {str(instance_id)}" + args + " --raw"], shell=True, capture_output=True) #will add more fields as necessary
 		if result is not None and result.stdout.decode('utf-8') is not None:
 			try:
 				response = json.loads(result.stdout.decode('utf-8'))
@@ -393,6 +409,8 @@ class InstanceSet:
 			self.stop_instance(instance["id"])
 
 	def destroy_instance(self, instance_id: float):
+		if instance_id in self.ignore_instance_ids:
+			return
 		print("destroying instance {}".format(instance_id))
 		result = subprocess.run(["vastai", "destroy", "instance", str(instance_id), "--raw"], capture_output=True)
 		response = result.stdout.decode('utf-8')
