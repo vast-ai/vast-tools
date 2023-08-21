@@ -3,13 +3,16 @@ from threading import Thread, Lock, Event
 import time
 import re
 import json
+from math import ceil
 import os
 from ratio_manager import update_rolling_average
 
 TIME_INTERVAL_SECONDS = 10
 MAX_COST_PER_HOUR = 10.0
+MAX_NUM_ACTIONS = 5
 INSTANCE_CONFIG_NAME = "OOBA_configs.json"
 IGNORE_INSTANCE_IDS = ["6802321"]
+ERROR_STRINGS = ["safetensors_rust.SafetensorError", "RuntimeError"]
 
 ####################################### INSTANCE ACCESS HELPERS #######################################
 #could be called on the output from 'show instance' or 'search offers'
@@ -89,6 +92,7 @@ class InstanceSet:
 
 		self.exit_event = Event()
 		self.manage = manage
+		self.manage_threads = []
 		self.p1 = Thread(target=self.update_and_manage_background, args=(self.exit_event, self.manage,))
 		self.p1.start()
 		self.cold_set_size = cold_set_size
@@ -120,19 +124,6 @@ class InstanceSet:
 			instance["tokens/s"] = tps
 			with open(f"instance_info/{instance['machine_id']}.json", "w") as f:
 				json.dump(instance, f)
-
-	#gets marks instances that are stopped and unable to be started again
-	# def tick_duration(self):
-	# 	bad_instance_ids = []
-	# 	for instance_id in self.started_instance_ids:
-	# 		for cold_instance in self.cold_instances:
-	# 			if instance_id == cold_instance["id"]:
-	# 				bad_instance_ids.append(instance_id)
-	# 				self.cold_instances.remove(cold_instance)
-	# 				break
-
-	# 	self.bad_instance_ids += bad_instance_ids
-	# 	self.started_instance_ids = []
 
 	def update_costs(self):
 		self.lock.acquire()
@@ -172,10 +163,8 @@ class InstanceSet:
 		while not event.is_set():
 			print("[autoscaler] ticking")
 			self.update_instance_info()
-			# self.tick_duration()
 			if manage:
 				self.manage_instances()
-			self.update_instance_info() #for cost check for newly started instances
 			time.sleep(TIME_INTERVAL_SECONDS)
 
 	def update_instance_info(self):
@@ -208,9 +197,40 @@ class InstanceSet:
 		self.loading_instances = loading_instances
 		self.lock.release()
 
+		# self.bad_instance_ids += self.find_error_instances()
 		self.update_ready_instances()
 		self.update_costs()
 		self.cost_safety_check()
+
+	def check_server_error(self, instance):
+		port_num = str(instance["ssh_port"])
+		host = instance["ssh_host"]
+		result = subprocess.run([f"ssh -p {port_num} -o StrictHostKeyChecking=no root@{host} grep -E '{ERROR_STRINGS[0]}|{ERROR_STRINGS[1]}' /app/onstart.log"], shell=True, capture_output=True)
+		out = result.stdout
+		if out is not None and ((ERROR_STRINGS[0] in out.decode('utf-8')) or (ERROR_STRINGS[1] in out.decode('utf-8'))):
+			instance["error"] = True
+		else:
+			instance["error"] = False
+
+	def find_error_instances(self):
+		self.lock.acquire()
+		error_instance_ids = []
+		threads = []
+		# loaded_but_not_hot = [inst for inst in self.hot_instances if inst not in self.ready_instances]
+		loaded_but_not_hot = [self.hot_instances[0]] if len(self.hot_instances) != 0 else []
+		for instance in loaded_but_not_hot:
+			t = Thread(target=self.check_server_error, args=(instance,))
+			threads.append((t, instance))
+			t.start()
+
+		for (t, instance) in threads:
+			t.join()
+			if instance["error"]:
+				error_instance_ids.append(instance["id"])
+
+		self.lock.release()
+
+		return error_instance_ids
 
 	def check_server_ready(self, instance): #could get notified by the server directly in the future
 		port_num = str(instance["ssh_port"])
@@ -252,8 +272,17 @@ class InstanceSet:
 
 		self.lock.release()
 
+	def manage_join(self):
+		for t in self.manage_threads:
+			t.join()
+
 	def manage_instances(self):
+		self.manage_join()
 		self.lock.acquire()
+
+		print("[autoscaler] dealing with bad instances")
+		self.act_on_instances(self.destroy_instance, len(self.bad_instance_ids), self.bad_instance_ids)
+		self.bad_instance_ids = []
 
 		if self.num_busy > self.strat.avg_num_busy:
 			num_hot_busy = self.num_busy
@@ -261,8 +290,7 @@ class InstanceSet:
 			num_hot_busy = update_rolling_average(self.strat.avg_num_busy, self.num_busy, TIME_INTERVAL_SECONDS, 0.01)
 		self.strat.avg_num_busy = num_hot_busy
 
-		num_starting = 0 #might want to keep this as a rolling tally
-		num_hot = self.num_hot + num_starting
+		num_hot = self.num_hot
 		num_model_loading = len(self.hot_instances) - num_hot
 		num_loading = len(self.loading_instances) + num_model_loading
 
@@ -277,50 +305,37 @@ class InstanceSet:
 		hot_ratio_rolling = (num_hot_rolling + 1) / (num_tot + 0.1)
 
 		print("[autoscaler] managing instances: hot_busy_ratio: {}, hot_ratio: {}, hot_ratio_rolling: {}, num_hot: {}, num_busy: {}, num_cold_ready: {}, num_loading: {}, num_total: {}".format(hot_busy_ratio, hot_ratio, hot_ratio_rolling, num_hot, num_hot_busy, len(self.cold_instances), num_loading, num_tot))
-		for instance_id in self.bad_instance_ids:
-			print("[autoscaler] destroying bad instance: {}".format(instance_id))
-			self.destroy_instance(instance_id)
-		self.bad_instance_ids = []
 
-		ask_list = self.get_asks(budget=True)
-
-		#start and stop instances
-		if (hot_busy_ratio > self.strat.target_hot_busy_ratio_upper) and (len(self.cold_instances) != 0):
-			print("[autoscaler] hot busy ratio too high!")
-			cold_idx = 0
-			while hot_busy_ratio > self.strat.target_hot_busy_ratio_upper and cold_idx < len(self.cold_instances):
-				new_id = self.cold_instances[cold_idx]['id']
-				cold_idx += 1
-				if self.start_instance(new_id):
-					num_hot += 1
-					hot_busy_ratio = (num_hot_busy + 1) / (num_hot + 1)
-
-		elif hot_busy_ratio < self.strat.target_hot_busy_ratio_lower:
+		#stop and start instances
+		if hot_busy_ratio < self.strat.target_hot_busy_ratio_lower:
 			print("[autoscaler] hot busy ratio too low!")
-			hot_idx = len(self.hot_instances) - 1
-			while hot_busy_ratio < self.strat.target_hot_busy_ratio_lower and hot_idx >= 0 and (len(self.hot_instances) != 0):
-				self.stop_instance(self.hot_instances[hot_idx]['id'])
-				num_hot -= 1
-				hot_busy_ratio = (num_hot_busy + 1) / (num_hot + 1)
-				hot_idx -= 1
+			count = int((self.strat.target_hot_busy_ratio_lower - hot_busy_ratio) * max(num_hot, 1))
+			#maybe I can filter for idle here
+			stop_thread = Thread(target=self.act_on_instances, args=(self.stop_instance, count, self.hot_instances.reverse()))
+			self.manage_threads.append(stop_thread)
+			stop_thread.start()
+
+		elif hot_busy_ratio >= self.strat.target_hot_busy_ratio_upper:
+			print("[autoscaler] hot busy ratio too high!")
+			count = int((hot_busy_ratio - self.strat.target_hot_busy_ratio_upper) * max(num_hot, 1))
+			start_thread = Thread(target=self.act_on_instances, args=(self.start_instance, count, self.cold_instances))
+			self.manage_threads.append(start_thread)
+			start_thread.start()
 
 		#create and destroy instances
 		if hot_ratio > self.strat.target_hot_ratio:
 			print("[autoscaler] hot ratio too high!")
-			ask_idx = 0
-			while hot_ratio > self.strat.target_hot_ratio and ask_idx < len(ask_list) - 1:
-				self.create_instance(ask_list[ask_idx]['id'])
-				num_tot += 1
-				hot_ratio = (num_hot + 1) / (num_tot + 1)
-				ask_idx += 1
+			count = int((hot_ratio - self.strat.target_hot_ratio) * max(num_tot, 1))
+			create_thread = Thread(target=self.act_on_instances, args=(self.create_instance, count, self.get_asks(budget=True)))
+			self.manage_threads.append(create_thread)
+			create_thread.start()
+
 		elif hot_ratio_rolling < self.strat.target_hot_ratio:
 			print("[autoscaler] hot ratio too low!")
-			cold_idx = len(self.cold_instances) - 1
-			while hot_ratio_rolling < self.strat.target_hot_ratio and cold_idx >= 0 and (len(self.cold_instances) != 0):
-				self.destroy_instance(self.cold_instances[cold_idx]['id']) #need to allow loading instances to be destroyed here because they are also considered cold
-				num_tot -= 1
-				hot_ratio_rolling = (num_hot_rolling + 1) / (num_tot + 1)
-				cold_idx -= 1
+			count = int((self.strat.target_hot_ratio - hot_ratio_rolling) * max(num_tot, 1))
+			destroy_thread = Thread(target=self.act_on_instances, args=(self.destroy_instance, count, self.cold_instances.reverse()))
+			self.manage_threads.append(destroy_thread)
+			destroy_thread.start()
 
 		self.lock.release()
 
@@ -362,10 +377,24 @@ class InstanceSet:
 
 	def create_instances(self, num_instances, model="13"):
 		ask_list = self.get_asks(model=model)
-		print(ask_list[:2])
 		ask_list_iter = iter(ask_list)
 		for _ in range(num_instances):
 			self.create_instance(next(ask_list_iter)['id'], model)
+
+	def act_on_instances(self, action, num_instances, instance_list):
+		print(f"calling {action.__name__} on {num_instances} instances")
+		num_instances = min(num_instances, MAX_NUM_ACTIONS) #safety catch
+		num_acted = 0
+		if instance_list is None:
+			return
+		for i in range(len(instance_list)):
+			if num_acted == num_instances:
+				break
+			element = instance_list[i]
+			if type(element) is dict:
+				element = element['id']
+			if action(element): #later parallelize
+				num_acted += 1
 
 	def start_instance(self, instance_id: float):
 		if instance_id in self.ignore_instance_ids:
@@ -383,8 +412,7 @@ class InstanceSet:
 			return
 		print("stopping instance {}".format(instance_id))
 		result = subprocess.run(["vastai", "stop", "instance", str(instance_id), "--raw"], capture_output=True)
-		response = result.stdout.decode('utf-8')
-		print(response)
+		return True
 
 	def create_instance(self, instance_id: float, model="13"):
 		config = self.instance_config[model]["create"]
@@ -400,21 +428,22 @@ class InstanceSet:
 			except json.decoder.JSONDecodeError:
 				pass
 
-	def destroy_all_instances(self):
-		for instance in (self.hot_instances + self.cold_instances + self.loading_instances):
-			self.destroy_instance(instance["id"])
-
-	def stop_all_instances(self):
-		for instance in (self.hot_instances + self.loading_instances):
-			self.stop_instance(instance["id"])
-
 	def destroy_instance(self, instance_id: float):
 		if instance_id in self.ignore_instance_ids:
 			return
 		print("destroying instance {}".format(instance_id))
 		result = subprocess.run(["vastai", "destroy", "instance", str(instance_id), "--raw"], capture_output=True)
-		response = result.stdout.decode('utf-8')
-		print(response)
+		# response = result.stdout.decode('utf-8')
+		# print(response)
+		return True
+
+	def destroy_all_instances(self):
+		all = self.hot_instances + self.cold_instances + self.loading_instances
+		self.act_on_instances(self.destroy_instance, len(all), all)
+
+	def stop_all_instances(self):
+		all = self.hot_instances + self.loading_instances
+		self.act_on_instances(self.stop_instance, len(all), all)
 
 	def print_instance_ids(self, label, instances):
 		for instance in instances:
