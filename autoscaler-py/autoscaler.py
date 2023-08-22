@@ -6,6 +6,7 @@ import re
 import json
 import os
 from ratio_manager import update_rolling_average
+from prompt_OOBA import format_prompt_request
 
 TIME_INTERVAL_SECONDS = 10
 MAX_COST_PER_HOUR = 10.0
@@ -14,6 +15,7 @@ INSTANCE_CONFIG_NAME = "OOBA_configs.json"
 IGNORE_INSTANCE_IDS = []
 BAD_MACHINE_IDS = [4424]
 ERROR_STRINGS = ["safetensors_rust.SafetensorError", "RuntimeError", "Error: remote port forwarding failed"]
+TEST_PROMPT = "What?"
 
 ####################################### INSTANCE ACCESS HELPERS #######################################
 #could be called on the output from 'show instance' or 'search offers'
@@ -34,6 +36,11 @@ def expected_performance(instance): #could be made more sophisticated, change to
 
 def get_instance_id(instance):
 	return instance["id"]
+
+def get_address(instance):
+	addr = instance["public_ipaddr"] + ":" + instance["ports"]["5000/tcp"][0]["HostPort"]
+	addr = addr.replace('\n', '')
+	return addr
 
 ####################################### MAIN CLASSES ##################################################
 class SimpleStrategy:
@@ -252,20 +259,34 @@ class InstanceSet:
 		else:
 			return False
 
+	def test_ready_instance(self, instance):
+		addr = get_address(instance)
+		response = format_prompt_request(addr, TEST_PROMPT, 10)
+		if response is not None:
+			return True
+		else:
+			return False
+
 	def update_ready_instances(self): #might want to take into account issue where a previous instance is no longer ready
 		self.lock.acquire()
 		if len(self.hot_instances) == 0:
 			self.lock.release()
 			return
 
-		ready_instances = []
-
+		hot_but_not_ready = [i for i in self.hot_instances if i not in self.ready_instances]
+		new_ready_instances = []
 		with ThreadPoolExecutor(MAX_CONCURRENCY) as e:
-			for instance, result in zip(self.hot_instances, e.map(self.check_server_ready, self.hot_instances)):
+			for instance, result in zip(hot_but_not_ready, e.map(self.check_server_ready, hot_but_not_ready)):
 				if result:
-					ready_instances.append(instance)
+					new_ready_instances.append(instance)
 
-		self.ready_instances = ready_instances
+		new_ready_instances_tested = []
+		with ThreadPoolExecutor(MAX_CONCURRENCY) as e:
+			for instance, result in zip(new_ready_instances, e.map(self.test_ready_instance, new_ready_instances)):
+				if result:
+					new_ready_instances_tested.append(instance)
+
+		self.ready_instances = [i for i in self.hot_instances if ((i in self.ready_instances) or (i in new_ready_instances_tested))] #gets rid of old ready instances that are no longer hot
 
 		# if len(self.ready_instances) != 0:
 		# 	with ThreadPoolExecutor(len(self.ready_instances)) as e:
@@ -280,7 +301,7 @@ class InstanceSet:
 		self.manage_threads = []
 
 	def manage_instances(self):
-		self.manage_join()
+		# self.manage_join()
 		self.lock.acquire()
 
 		print("[autoscaler] dealing with bad instances")
@@ -342,6 +363,7 @@ class InstanceSet:
 			self.manage_threads.append(destroy_thread)
 			destroy_thread.start()
 
+		self.manage_join()
 		self.lock.release()
 
 	############################### vastai API Helper Functions ##########################################################
