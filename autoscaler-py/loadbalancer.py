@@ -55,6 +55,7 @@ class LoadBalancer:
 		tot_duration = 0
 		num_ready = 0
 		ready_ids = []
+
 		for (_, _, instance) in list(self.ready_queue):
 			ready_ids.append(instance["id"])
 			prev_queue_duration = self.queue_duration[instance['id']]
@@ -63,13 +64,14 @@ class LoadBalancer:
 			if instance["id"] in self.old_ready_ids:
 				num_ready += 1
 			tot_duration += curr_queue_duration
-			print("[loadbalancer] instance: {} has queue duration: {}".format(instance['id'], curr_queue_duration))
+			# print("[loadbalancer] instance: {} has queue duration: {}".format(instance['id'], curr_queue_duration))
 
 		num_soon_ready = len(self.ready_queue)
 		avg_duration = tot_duration / num_soon_ready if num_soon_ready != 0 else 0
 		busy_level = avg_duration / FULL_LOAD_THRESHOLD
 		num_busy = int(busy_level * num_ready)
 
+		print(f"[loadbalancer] ticking duration with {len(self.ready_queue)} ready and {avg_duration} avg duration")
 		self.old_ready_ids = ready_ids
 		self.instance_set.lock.acquire()
 		self.instance_set.num_busy = num_busy
@@ -84,7 +86,9 @@ class LoadBalancer:
 			time.sleep(TIME_INTERVAL_SECONDS)
 
 	def get_address(self, instance):
-		return instance["public_ipaddr"] + ":" + instance["ports"]["5000/tcp"][0]["HostPort"]
+		addr = instance["public_ipaddr"] + ":" + instance["ports"]["5000/tcp"][0]["HostPort"]
+		addr = addr.replace('\n', '')
+		return addr
 
 	def get_next_addr(self, num_tokens):
 		addr = None

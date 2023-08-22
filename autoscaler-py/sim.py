@@ -66,7 +66,7 @@ class Sim:
         self.client.setup_lb()
         self.client.wait_for_hot()
         for i in range(self.num_iters):
-            num_users = self.base_num_users + 5 * (i // 5)
+            num_users = self.base_num_users + 20 * (i // 5)
             print(f"[sim] sending: {num_users} requests")
             self.init_users(num_users, self.base_task_prob)
             self.update()
@@ -79,7 +79,7 @@ class Sim:
         self.deconstruct()
 
 def main():
-    sim = Sim(num_iters=10, base_num_users=20, base_task_prob=1.0)
+    sim = Sim(num_iters=2, base_num_users=2, base_task_prob=1.0)
     sim.run()
 
 if __name__ == "__main__":

@@ -2,6 +2,8 @@ import time
 from threading import Lock
 import requests
 from collections import defaultdict
+import subprocess
+import json
 
 from prompt_OOBA import format_prompt_request
 
@@ -14,6 +16,7 @@ class ClientMetrics:
 		self.num_requests_successful = 0
 		self.total_tokens_requested = 0
 
+		self.balance = 0.0
 		self.total_cost = 0.0
 
 		self.total_request_time = 0.0 #elapsed time across all successful requests
@@ -26,6 +29,7 @@ class ClientMetrics:
 		self.machine_stats_dict = defaultdict(lambda: default_value.copy())
 
 		self.lock = Lock()
+		self.zero_costs()
 
 	#call below with lock LOCKED
 	def get_time_elapsed(self):
@@ -46,6 +50,30 @@ class ClientMetrics:
 		else:
 			ret = 0.0
 		return ret
+
+	def zero_costs(self):
+		result = subprocess.run([f"vastai show invoices --raw"], shell=True, capture_output=True)
+		transactions = json.loads(result.stdout.decode('utf-8'))
+		balance = 0.0
+		for t in transactions:
+			# print(t)
+			if "is_credit" in t.keys():
+				balance += float(t["amount"])
+			else:
+				balance -= float(t["amount"])
+		self.balance = balance
+
+	def calculate_costs(self):
+		result = subprocess.run([f"vastai show invoices --raw"], shell=True, capture_output=True)
+		transactions = json.loads(result.stdout.decode('utf-8'))
+		new_balance = 0.0
+		for t in transactions:
+			if "is_credit" in t.keys():
+				new_balance += float(t["amount"])
+			else:
+				new_balance -= float(t["amount"])
+		cost = self.balance - new_balance
+		self.total_cost = cost
 
 	def get_total_cost(self):
 		ret = self.total_cost
@@ -68,13 +96,15 @@ class ClientMetrics:
 
 	def print_metrics(self):
 		self.lock.acquire()
+		self.calculate_costs()
 		print("overall metrics:")
 		print("-----------------------------------------------------")
 		print("number of requests started: {}".format(self.num_requests_started))
 		print("number of requests finished: {}".format(self.num_requests_finished))
 		print("number of requests successful: {}".format(self.num_requests_successful))
-		print("number of tokens requested: {}".format(self.total_tokens_requested))
+		print(f"reliability ratio: {self.num_requests_successful / self.num_requests_finished}")
 
+		print("number of tokens requested: {}".format(self.total_tokens_requested))
 		print("total time elapsed: {}".format(self.get_time_elapsed()))
 
 		print("number of requests per second: {}".format(self.get_request_throughput()))
