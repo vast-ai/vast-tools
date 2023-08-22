@@ -92,6 +92,7 @@ class LoadBalancer:
 		if len(self.ready_queue) != 0:
 			(_, _, ready_server) = heapq.heappop(self.ready_queue)
 			addr = self.get_address(ready_server)
+			id = ready_server["id"]
 			# if "tokens/s" in ready_server.keys():
 			# 	tps = ready_server["tokens/s"]
 			# else:
@@ -100,6 +101,6 @@ class LoadBalancer:
 			self.queue_duration[ready_server["id"]] += ((1 / tps) * num_tokens)
 			heapq.heappush(self.ready_queue, (self.queue_duration[ready_server["id"]], ready_server["id"], ready_server))
 		self.lock.release()
-		print("[loadbalancer] next addr is: {}".format(addr))
+		print(f"[loadbalancer] next addr is: {addr} on instance: {id}")
 		return addr
 

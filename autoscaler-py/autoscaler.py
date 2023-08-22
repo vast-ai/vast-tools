@@ -1,15 +1,15 @@
 import subprocess
 from threading import Thread, Lock, Event
+from concurrent.futures import ThreadPoolExecutor
 import time
 import re
 import json
-from math import ceil
 import os
 from ratio_manager import update_rolling_average
 
 TIME_INTERVAL_SECONDS = 10
 MAX_COST_PER_HOUR = 10.0
-MAX_NUM_ACTIONS = 5
+MAX_NUM_ACTIONS = 20
 INSTANCE_CONFIG_NAME = "OOBA_configs.json"
 IGNORE_INSTANCE_IDS = ["6802321"]
 ERROR_STRINGS = ["safetensors_rust.SafetensorError", "RuntimeError"]
@@ -202,34 +202,32 @@ class InstanceSet:
 		self.update_costs()
 		self.cost_safety_check()
 
-	def check_server_error(self, instance):
+	def check_server_error(self, instance): #will hang, might need to find a faster way to do this
 		port_num = str(instance["ssh_port"])
 		host = instance["ssh_host"]
 		result = subprocess.run([f"ssh -p {port_num} -o StrictHostKeyChecking=no root@{host} grep -E '{ERROR_STRINGS[0]}|{ERROR_STRINGS[1]}' /app/onstart.log"], shell=True, capture_output=True)
 		out = result.stdout
 		if out is not None and ((ERROR_STRINGS[0] in out.decode('utf-8')) or (ERROR_STRINGS[1] in out.decode('utf-8'))):
-			instance["error"] = True
+			return True
 		else:
-			instance["error"] = False
+			return False
 
 	def find_error_instances(self):
 		self.lock.acquire()
-		error_instance_ids = []
-		threads = []
-		# loaded_but_not_hot = [inst for inst in self.hot_instances if inst not in self.ready_instances]
-		loaded_but_not_hot = [self.hot_instances[0]] if len(self.hot_instances) != 0 else []
-		for instance in loaded_but_not_hot:
-			t = Thread(target=self.check_server_error, args=(instance,))
-			threads.append((t, instance))
-			t.start()
 
-		for (t, instance) in threads:
-			t.join()
-			if instance["error"]:
-				error_instance_ids.append(instance["id"])
+		loaded_but_not_hot = [inst for inst in self.hot_instances if inst not in self.ready_instances]
+		# loaded_but_not_hot = [self.hot_instances[0]] if len(self.hot_instances) != 0 else []
+		if len(loaded_but_not_hot) == 0:
+			self.lock.release()
+			return
+
+		error_instance_ids = []
+		with ThreadPoolExecutor(len(loaded_but_not_hot)) as e:
+			for instance, result in zip(loaded_but_not_hot, e.map(self.check_server_error, loaded_but_not_hot)):
+				if result:
+					error_instance_ids.append(instance["id"])
 
 		self.lock.release()
-
 		return error_instance_ids
 
 	def check_server_ready(self, instance): #could get notified by the server directly in the future
@@ -238,43 +236,36 @@ class InstanceSet:
 		result = subprocess.run(["ssh", "-p", port_num, "-o", "StrictHostKeyChecking=no", "root@{}".format(host), "grep 'Starting API at http://0.0.0.0:5000/api' /app/onstart.log | tail -n 1"], capture_output=True)
 		out = result.stdout
 		if out is not None and "Starting API at http://0.0.0.0:5000/api" in out.decode('utf-8'):
-			instance["ready"] = True
+			return True
 		else:
-			instance["ready"] = False
+			return False
 
 	def update_ready_instances(self): #might want to take into account issue where a previous instance is no longer ready
 		self.lock.acquire()
-		ready_instances = []
-		threads = []
-		for hot_instance in self.hot_instances:
-			if hot_instance in self.ready_instances:
-				ready_instances.append(hot_instance)
-			else:
-				t = Thread(target=self.check_server_ready, args=(hot_instance,))
-				threads.append((t, hot_instance))
-				t.start()
+		if len(self.hot_instances) == 0:
+			self.lock.release()
+			return
 
-		for (t, hot_instance) in threads:
-			t.join()
-			if hot_instance["ready"]:
-				ready_instances.append(hot_instance)
+		ready_instances = []
+		with ThreadPoolExecutor(len(self.hot_instances)) as e:
+			for instance, result in zip(self.hot_instances, e.map(self.check_server_ready, self.hot_instances)):
+				if result:
+					ready_instances.append(instance)
 
 		self.ready_instances = ready_instances
 
-		threads = []
-		for ready_instance in self.ready_instances:
-			t = Thread(target=self.update_tokens_per_second, args=(ready_instance,))
-			threads.append(t)
-			t.start()
-
-		for t in threads:
-			t.join()
+		if len(self.ready_instances) != 0:
+			with ThreadPoolExecutor(len(self.ready_instances)) as e:
+				e.map(self.update_tokens_per_second, self.ready_instances)
 
 		self.lock.release()
 
 	def manage_join(self):
+		print("[autoscaler] starting manage join")
 		for t in self.manage_threads:
 			t.join()
+		self.manage_threads = []
+		print("[autoscaler] ending manage join")
 
 	def manage_instances(self):
 		self.manage_join()
@@ -287,7 +278,7 @@ class InstanceSet:
 		if self.num_busy > self.strat.avg_num_busy:
 			num_hot_busy = self.num_busy
 		else:
-			num_hot_busy = update_rolling_average(self.strat.avg_num_busy, self.num_busy, TIME_INTERVAL_SECONDS, 0.01)
+			num_hot_busy = int(update_rolling_average(self.strat.avg_num_busy, self.num_busy, TIME_INTERVAL_SECONDS, 0.01))
 		self.strat.avg_num_busy = num_hot_busy
 
 		num_hot = self.num_hot
@@ -297,7 +288,7 @@ class InstanceSet:
 		num_cold = len(self.cold_instances) + num_loading
 		num_tot = num_hot + num_cold
 
-		hot_busy_ratio = (num_hot_busy + 1) / (num_hot + 1)
+		hot_busy_ratio = (num_hot_busy + 1) / (num_hot + 0.1)
 		hot_ratio = (num_hot + 1) / (num_tot + 0.1)
 
 		num_hot_rolling = update_rolling_average(self.strat.avg_num_hot, num_hot, TIME_INTERVAL_SECONDS, 0.01)
@@ -309,15 +300,16 @@ class InstanceSet:
 		#stop and start instances
 		if hot_busy_ratio < self.strat.target_hot_busy_ratio_lower:
 			print("[autoscaler] hot busy ratio too low!")
-			count = int((self.strat.target_hot_busy_ratio_lower - hot_busy_ratio) * max(num_hot, 1))
+			count = num_hot - int((hot_busy_ratio / self.strat.target_hot_busy_ratio_lower) * max(num_hot, 1))
 			#maybe I can filter for idle here
-			stop_thread = Thread(target=self.act_on_instances, args=(self.stop_instance, count, self.hot_instances.reverse()))
+			hot_instances = self.hot_instances[::-1]
+			stop_thread = Thread(target=self.act_on_instances, args=(self.stop_instance, count, hot_instances))
 			self.manage_threads.append(stop_thread)
 			stop_thread.start()
 
 		elif hot_busy_ratio >= self.strat.target_hot_busy_ratio_upper:
 			print("[autoscaler] hot busy ratio too high!")
-			count = int((hot_busy_ratio - self.strat.target_hot_busy_ratio_upper) * max(num_hot, 1))
+			count = int((hot_busy_ratio / self.strat.target_hot_busy_ratio_upper) * max(num_hot, 1)) - num_hot
 			start_thread = Thread(target=self.act_on_instances, args=(self.start_instance, count, self.cold_instances))
 			self.manage_threads.append(start_thread)
 			start_thread.start()
@@ -325,15 +317,16 @@ class InstanceSet:
 		#create and destroy instances
 		if hot_ratio > self.strat.target_hot_ratio:
 			print("[autoscaler] hot ratio too high!")
-			count = int((hot_ratio - self.strat.target_hot_ratio) * max(num_tot, 1))
+			count = int((hot_ratio / self.strat.target_hot_ratio) * max(num_tot, 1)) - num_tot
 			create_thread = Thread(target=self.act_on_instances, args=(self.create_instance, count, self.get_asks(budget=True)))
 			self.manage_threads.append(create_thread)
 			create_thread.start()
 
 		elif hot_ratio_rolling < self.strat.target_hot_ratio:
 			print("[autoscaler] hot ratio too low!")
-			count = int((self.strat.target_hot_ratio - hot_ratio_rolling) * max(num_tot, 1))
-			destroy_thread = Thread(target=self.act_on_instances, args=(self.destroy_instance, count, self.cold_instances.reverse()))
+			count = num_tot - int((hot_ratio_rolling / self.strat.target_hot_ratio) * max(num_tot, 1))
+			cold_instances = self.cold_instances[::-1]
+			destroy_thread = Thread(target=self.act_on_instances, args=(self.destroy_instance, count, cold_instances))
 			self.manage_threads.append(destroy_thread)
 			destroy_thread.start()
 
@@ -384,19 +377,25 @@ class InstanceSet:
 	def act_on_instances(self, action, num_instances, instance_list):
 		print(f"calling {action.__name__} on {num_instances} instances")
 		num_instances = min(num_instances, MAX_NUM_ACTIONS) #safety catch
-		num_acted = 0
-		if instance_list is None:
+		if instance_list is None or len(instance_list) == 0:
 			return
-		for i in range(len(instance_list)):
-			if num_acted == num_instances:
-				break
-			element = instance_list[i]
-			if type(element) is dict:
-				element = element['id']
-			if action(element): #later parallelize
-				num_acted += 1
 
-	def start_instance(self, instance_id: float):
+		if type(instance_list[0]) is dict:
+			id_list = list(map(get_instance_id, instance_list))
+		else:
+			id_list = instance_list
+		num_remaining = num_instances
+		while num_remaining > 0 and num_remaining <= len(id_list):
+			curr_ids = id_list[:num_remaining]
+			id_list = id_list[num_remaining:]
+			with ThreadPoolExecutor(num_remaining) as e:
+				for result in e.map(action, curr_ids):
+					if result:
+						num_remaining -= 1
+
+		print(f"sucessfully called {action.__name__} on {num_instances - num_remaining} instances")
+
+	def start_instance(self, instance_id):
 		if instance_id in self.ignore_instance_ids:
 			return
 		print("starting instance: {}".format(instance_id))
@@ -407,14 +406,14 @@ class InstanceSet:
 			print(result.stdout.decode('utf-8'))
 			return False
 
-	def stop_instance(self, instance_id: float):
+	def stop_instance(self, instance_id):
 		if instance_id in self.ignore_instance_ids:
 			return
 		print("stopping instance {}".format(instance_id))
 		result = subprocess.run(["vastai", "stop", "instance", str(instance_id), "--raw"], capture_output=True)
 		return True
 
-	def create_instance(self, instance_id: float, model="13"):
+	def create_instance(self, instance_id, model="13"):
 		config = self.instance_config[model]["create"]
 		print("creating instance {}".format(instance_id))
 		args = f" --onstart {config['onstart']} --image {config['image']} --disk {config['disk']}"

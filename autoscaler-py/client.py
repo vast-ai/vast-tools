@@ -12,7 +12,7 @@ class ClientMetrics:
 		self.num_requests_started = 0
 		self.num_requests_finished = 0
 		self.num_requests_successful = 0
-		self.total_tokens_generated = 0
+		self.total_tokens_requested = 0
 
 		self.total_cost = 0.0
 
@@ -22,7 +22,7 @@ class ClientMetrics:
 		self.min_request_latency = float('inf')
 		self.max_request_latency = 0.0
 
-		default_value = {"num_requests_started": 0, "num_requests_finished": 0, "num_requests_successful" : 0, "total_tokens_generated" : 0, "total_request_time": 0.0, "reported_tps": 0.0}
+		default_value = {"num_requests_started": 0, "num_requests_finished": 0, "num_requests_successful" : 0, "total_tokens_requested" : 0, "total_request_time": 0.0, "reported_tps": 0.0}
 		self.machine_stats_dict = defaultdict(lambda: default_value.copy())
 
 		self.lock = Lock()
@@ -37,7 +37,7 @@ class ClientMetrics:
 		return ret
 
 	def get_tokens_throughput(self):
-		ret = self.total_tokens_generated / self.get_time_elapsed()
+		ret = self.total_tokens_requested / self.get_time_elapsed()
 		return ret
 
 	def get_average_latency(self):
@@ -52,8 +52,8 @@ class ClientMetrics:
 		return ret
 
 	def get_cost_per_token(self): #cost per kilo-token
-		if self.total_tokens_generated != 0:
-			ret = self.get_total_cost() / (self.total_tokens_generated / 1000)
+		if self.total_tokens_requested != 0:
+			ret = self.get_total_cost() / (self.total_tokens_requested / 1000)
 		else:
 			ret = 0.0
 		return ret
@@ -63,7 +63,7 @@ class ClientMetrics:
 		metric_dict = self.machine_stats_dict[instance_ip]
 		for metric, value in metric_dict.items():
 			print(f"{metric}: {value}")
-		real_tps = 0 if metric_dict["total_request_time"] == 0 else metric_dict["total_tokens_generated"] / metric_dict["total_request_time"]
+		real_tps = 0 if metric_dict["total_request_time"] == 0 else metric_dict["total_tokens_requested"] / metric_dict["total_request_time"]
 		print("real_tps: {}".format(real_tps))
 
 	def print_metrics(self):
@@ -73,7 +73,7 @@ class ClientMetrics:
 		print("number of requests started: {}".format(self.num_requests_started))
 		print("number of requests finished: {}".format(self.num_requests_finished))
 		print("number of requests successful: {}".format(self.num_requests_successful))
-		print("number of tokens generated: {}".format(self.total_tokens_generated))
+		print("number of tokens requested: {}".format(self.total_tokens_requested))
 
 		print("total time elapsed: {}".format(self.get_time_elapsed()))
 
@@ -162,8 +162,8 @@ class Client:
 				machine_entry['total_request_time'] += time_elapsed
 				self.metrics.min_request_latency = min(self.metrics.min_request_latency, time_elapsed)
 				self.metrics.max_request_latency = max(self.metrics.max_request_latency, time_elapsed)
-				self.metrics.total_tokens_generated += num_tokens
-				machine_entry["total_tokens_generated"] += num_tokens
+				self.metrics.total_tokens_requested += num_tokens
+				machine_entry["total_tokens_requested"] += num_tokens
 			self.metrics.lock.release()
 		else:
 			print("[client] unable to get free gpu server address from the load balancer server")
@@ -213,9 +213,9 @@ class Client:
 			iters += 1
 		self.shutdown_lb()
 
-# def main():
-# 	c = Client()
-# 	c.create_cold_set(2)
+def main():
+	c = Client()
+	c.create_cold_set(100)
 
-# if __name__ == "__main__":
-# 	main()
+if __name__ == "__main__":
+	main()

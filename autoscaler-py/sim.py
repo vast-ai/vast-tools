@@ -10,7 +10,7 @@ PROMPTS = [ "Yesterday I woke up and I saw that my dog was missing. This made me
 ]
 
 class User:
-    def __init__(self, task_prob, prompt=PROMPTS[0], response_length=300):
+    def __init__(self, task_prob, prompt=PROMPTS[0], response_length=100):
         self.task_prob = task_prob
         self.prompt = prompt
         self.response_length = response_length
@@ -66,7 +66,9 @@ class Sim:
         self.client.setup_lb()
         self.client.wait_for_hot()
         for i in range(self.num_iters):
-            self.init_users(self.base_num_users + i, self.base_task_prob)
+            num_users = self.base_num_users + 5 * (i // 5)
+            print(f"[sim] sending: {num_users} requests")
+            self.init_users(num_users, self.base_task_prob)
             self.update()
             time.sleep(15)
         self.exit_event.set()
@@ -77,7 +79,7 @@ class Sim:
         self.deconstruct()
 
 def main():
-    sim = Sim(num_iters=10, base_num_users=4, base_task_prob=1.0)
+    sim = Sim(num_iters=10, base_num_users=20, base_task_prob=1.0)
     sim.run()
 
 if __name__ == "__main__":

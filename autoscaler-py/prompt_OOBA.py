@@ -55,3 +55,12 @@ def format_prompt_request(gpu_server_addr, text_prompt, num_tokens):
 			print("gpu server at address: {} reports code: {}".format(gpu_server_addr, response.status_code))
 	except requests.exceptions.ConnectionError as e:
 		print("can't reach gpu server, recieved error : {}".format(e))
+
+def main():
+	addr = "195.29.196.251:50011"
+	regular_prompt = "Please make suggestions to help me improve the following article: The Xá Lợi Pagoda raids were a series of synchronized attacks on various Buddhist pagodas in the major cities of South Vietnam shortly after midnight on 21 August 1963. The raids were executed by the Army of the Republic of Vietnam Special Forces under Colonel Lê Quang Tung, and combat police, both of which took their orders directly from Ngô Đình Nhu, younger brother of the Roman Catholic President Ngô Đình Diệm. Xá Lợi Pagoda, the largest pagoda in the South Vietnamese capital, Saigon, was the most prominent of the raided temples. Over 1,400 Buddhists were arrested, and estimates of the death toll and missing ranged up to the hundreds. In response to the Huế Vesak shootings and a ban on the Buddhist flag in early May, South Vietnam's Buddhist majority rose in widespread civil disobedience and protest against the religious bias and discrimination of the Catholic-dominated Diệm government. Buddhist temples in major cities, most prominently the Xá Lợi pagoda, became focal points for protesters and assembly points for Buddhist monks from rural areas."
+	response = format_prompt_request(addr, regular_prompt, 200)
+	print(response)
+
+if __name__ == "__main__":
+	main()
