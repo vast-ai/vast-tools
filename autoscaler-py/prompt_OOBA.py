@@ -42,19 +42,22 @@ def format_prompt_request(gpu_server_addr, text_prompt, num_tokens):
 	URI = f'http://{gpu_server_addr}/api/v1/generate'
 	request_dict['prompt'] = text_prompt
 	request_dict['max_new_tokens'] = num_tokens
-
+	text_result = None
+	error = None
 	try:
 		response = requests.post(URI, json=request_dict)
 		if response.status_code == 200:
 			try:
 				result = response.json()['results'][0]['text']
-				return text_prompt + result
+				text_result = text_prompt + result
 			except json.decoder.JSONDecodeError:
-				print("gpu server at address: {} reponded with invalid JSON".format(gpu_server_addr))
+				error = "json"
 		else:
-			print("gpu server at address: {} reports code: {}".format(gpu_server_addr, response.status_code))
+			error = f"code:{response.status_code}"
 	except requests.exceptions.ConnectionError as e:
-		print("can't reach gpu server, recieved error : {}".format(e))
+		error = f"connection error:{e}"
+
+	return {"reply" : text_result, "error": error}
 
 def main():
 	addr = "195.29.196.251:50011"

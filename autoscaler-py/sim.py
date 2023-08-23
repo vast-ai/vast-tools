@@ -1,7 +1,11 @@
 import random
 import time
 from threading import Thread, Lock, Event
+from concurrent.futures import ThreadPoolExecutor
 from client import Client
+import uuid
+
+MAX_CONCURRENCY = 100
 
 PROMPTS = [ "Yesterday I woke up and I saw that my dog was missing. This made me think that ",
             "I have been thinking a lot about the question of what the best movie of all time is. There are a lot of different ways to approach this question, but for me the most important factor is how exciting it is. With that in mind, I would say the best movie is: ",
@@ -10,19 +14,25 @@ PROMPTS = [ "Yesterday I woke up and I saw that my dog was missing. This made me
 ]
 
 class User:
-    def __init__(self, task_prob, prompt=PROMPTS[0], response_length=100):
-        self.task_prob = task_prob
+    def __init__(self, id, rate, prompt=PROMPTS[0], max_response_length=200):
+        self.id = id
+        self.rate = rate # prob / sec
         self.prompt = prompt
-        self.response_length = response_length
+        self.max_response_length = max_response_length
+        self.waiting = False
+        self.num_chats = 0
+        self.lock = Lock()
 
 class Sim:
-    def __init__(self, num_iters, base_num_users, base_task_prob):
+    def __init__(self, num_iters, base_num_users, base_rate, etime):
         self.users = []
-        self.client = Client()
-        self.num_iters = num_iters
-        self.base_num_users = base_num_users
-        self.base_task_prob = base_task_prob
 
+        self.num_iters = num_iters
+        self.num_users = base_num_users
+        self.base_rate = base_rate
+        self.etime = etime
+
+        self.client = Client()
         self.req_num = 0
 
         self.threads = []
@@ -32,22 +42,36 @@ class Sim:
         self.bg.start()
 
     #called every so often to change user number and request probability
-    def init_users(self, num_users, base_task_prob):
-        self.users = []
-        for _ in range(num_users):
-            prompt = random.choices(PROMPTS, weights=[0.3, 0.3, 0.3, 0.1], k=1)[0]
-            self.users.append(User(task_prob=random.gauss(mu=base_task_prob, sigma=0.1), prompt=prompt))
+    def init_users(self):
+        users = [] #blank it out
+        user_prompts = random.choices(PROMPTS, weights=[0.3, 0.3, 0.3, 0.1], k=self.num_users)
+        for up in user_prompts:
+            users.append(User(id=uuid.uuid4(), rate=self.base_rate, prompt=up))
+        self.users = users
+
+    def send_chat(self, user):
+        user.lock.acquire()
+        prob = user.rate * self.etime
+        if (not(user.waiting) and random.random() <= prob):
+            request_str = f"{user.id}-{user.num_chats}"
+            prompt = user.prompt
+            max_tokens = user.max_response_length
+            user.waiting = True
+            user.lock.release()
+            self.client.send_prompt(prompt, max_tokens, request_str)
+            user.lock.acquire()
+            user.num_chats += 1
+            user.waiting = False
+        user.lock.release()
+
+    def update_loop(self):
+        with ThreadPoolExecutor(MAX_CONCURRENCY) as e:
+            e.map(self.send_chat, self.users)
 
     def update(self):
-        choices = [True, False]
-        for user in self.users:
-            probs = [user.task_prob, 1 - user.task_prob]
-            act = random.choices(choices, weights=probs, k=1)[0]
-            if act:
-                t = Thread(target=self.client.send_prompt, args=(user.prompt, user.response_length, self.req_num))
-                self.req_num += 1
-                self.threads.append(t)
-                t.start()
+        t = Thread(target=self.update_loop)
+        self.threads.append(t)
+        t.start()
 
     def join_rest(self):
         for t in self.threads:
@@ -60,26 +84,27 @@ class Sim:
             time.sleep(10)
 
     def deconstruct(self):
+        self.exit_event.set()
+        self.bg.join()
+        self.join_rest()
         self.client.shutdown_lb()
 
     def run(self):
         self.client.setup_lb()
         self.client.wait_for_hot()
+        self.init_users()
+
         for i in range(self.num_iters):
-            num_users = self.base_num_users + 20 * (i // 5)
-            print(f"[sim] sending: {num_users} requests")
-            self.init_users(num_users, self.base_task_prob)
             self.update()
-            time.sleep(15)
-        self.exit_event.set()
-        self.bg.join()
-        self.join_rest()
+            time.sleep(self.etime)
+
         self.client.get_metrics()
         self.client.metrics.print_metrics()
         self.deconstruct()
 
+
 def main():
-    sim = Sim(num_iters=2, base_num_users=2, base_task_prob=1.0)
+    sim = Sim(num_iters=50, base_num_users=500, base_rate=1.0 * (10 / 60), etime=2.0)
     sim.run()
 
 if __name__ == "__main__":

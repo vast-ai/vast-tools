@@ -1,8 +1,10 @@
 from flask import Flask, request
 from loadbalancer import LoadBalancer
+import logging
 
 
 app = Flask(__name__)
+app.logger.setLevel(logging.WARNING)
 
 lb = None
 

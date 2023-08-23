@@ -11,10 +11,10 @@ WAIT_INTERVAL = 20
 
 class ClientMetrics:
 	def __init__(self):
-		self.num_requests_started = 0
 		self.num_requests_finished = 0
 		self.num_requests_successful = 0
 		self.total_tokens_requested = 0
+		self.num_serverless_server_busy = 0
 
 		self.balance = 0.0
 		self.total_cost = 0.0
@@ -25,7 +25,7 @@ class ClientMetrics:
 		self.min_request_latency = float('inf')
 		self.max_request_latency = 0.0
 
-		default_value = {"num_requests_started": 0, "num_requests_finished": 0, "num_requests_successful" : 0, "total_tokens_requested" : 0, "total_request_time": 0.0, "reported_tps": 0.0}
+		default_value = {"num_requests_finished": 0, "num_requests_successful" : 0, "total_tokens_requested" : 0, "total_request_time": 0.0, "reported_tps": 0.0}
 		self.machine_stats_dict = defaultdict(lambda: default_value.copy())
 
 		self.lock = Lock()
@@ -99,7 +99,6 @@ class ClientMetrics:
 		self.calculate_costs()
 		print("overall metrics:")
 		print("-----------------------------------------------------")
-		print("number of requests started: {}".format(self.num_requests_started))
 		print("number of requests finished: {}".format(self.num_requests_finished))
 		print("number of requests successful: {}".format(self.num_requests_successful))
 		print(f"reliability ratio: {self.num_requests_successful / self.num_requests_finished}")
@@ -155,48 +154,47 @@ class Client:
 		else:
 			print("[client] load balancer server shutdown failed")
 
+
+	def update_metrics(self, gpu_addr, success, num_tokens, time_elapsed):
+		self.metrics.lock.acquire()
+		machine_entry = self.metrics.machine_stats_dict[gpu_addr]
+		self.metrics.num_requests_finished += 1
+		machine_entry['num_requests_finished'] += 1
+		if success:
+			self.metrics.num_requests_successful += 1
+			machine_entry["num_requests_successful"] += 1
+			self.metrics.total_request_time += time_elapsed
+			machine_entry['total_request_time'] += time_elapsed
+			self.metrics.min_request_latency = min(self.metrics.min_request_latency, time_elapsed)
+			self.metrics.max_request_latency = max(self.metrics.max_request_latency, time_elapsed)
+			self.metrics.total_tokens_requested += num_tokens
+			machine_entry["total_tokens_requested"] += num_tokens
+		self.metrics.lock.release()
+
+	def metrics_report_busy(self):
+		self.metrics.lock.acquire()
+		self.metrics.num_serverless_server_busy += 1
+		self.metrics.lock.release()
+
 	def send_prompt(self, text_prompt, num_tokens, request_num):
-		# print("[client] sending prompt")
 		request_dict = {"num_tokens" : num_tokens}
 		URI = f'http://{self.lb_server_addr}/connect'
 		try:
 			response = requests.get(URI, json=request_dict)
-		except requests.exceptions.ConnectionError as e:
-			print("[client] unable to reach loadbalancer with request: {}".format(e.request.path_url))
+		except requests.exceptions.ConnectionError:
+			self.metrics_report_busy()
 			return
 
 		if response.status_code == 200 and response.json()["addr"] is not None:
-			gpu_server_addr = response.json()["addr"]
-			print("[client] request num: {} using hot address: {}".format(request_num, gpu_server_addr))
-
-			self.metrics.lock.acquire()
-			self.metrics.num_requests_started += 1
-			self.metrics.machine_stats_dict[gpu_server_addr]["num_requests_started"] += 1
-			self.metrics.lock.release()
-
+			gpu_addr = response.json()["addr"]
 			start_time = time.time()
-			gpu_response = format_prompt_request(gpu_server_addr, text_prompt, num_tokens)
-			# print(gpu_response)
+			gpu_response = format_prompt_request(gpu_addr, text_prompt, num_tokens)
 			end_time = time.time()
-			print("[client] request num: {} using address: {} returned, success: {}".format(request_num, gpu_server_addr, gpu_response is not None))
 			time_elapsed = end_time - start_time
-
-			self.metrics.lock.acquire()
-			machine_entry = self.metrics.machine_stats_dict[gpu_server_addr]
-			self.metrics.num_requests_finished += 1
-			machine_entry['num_requests_finished'] += 1
-			if gpu_response is not None:
-				self.metrics.num_requests_successful += 1
-				machine_entry["num_requests_successful"] += 1
-				self.metrics.total_request_time += time_elapsed
-				machine_entry['total_request_time'] += time_elapsed
-				self.metrics.min_request_latency = min(self.metrics.min_request_latency, time_elapsed)
-				self.metrics.max_request_latency = max(self.metrics.max_request_latency, time_elapsed)
-				self.metrics.total_tokens_requested += num_tokens
-				machine_entry["total_tokens_requested"] += num_tokens
-			self.metrics.lock.release()
+			success = (gpu_response["reply"] is not None)
+			self.update_metrics(gpu_addr, success, num_tokens, time_elapsed)
 		else:
-			print("[client] unable to get free gpu server address from the load balancer server")
+			self.metrics_report_busy()
 
 	def get_metrics(self):
 		URI = f'http://{self.lb_server_addr}/metrics'

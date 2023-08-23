@@ -8,7 +8,7 @@ import os
 from ratio_manager import update_rolling_average
 from prompt_OOBA import format_prompt_request
 
-TIME_INTERVAL_SECONDS = 10
+TIME_INTERVAL_SECONDS = 5
 MAX_COST_PER_HOUR = 10.0
 MAX_CONCURRENCY = 100 #for concurrency concerns
 INSTANCE_CONFIG_NAME = "OOBA_configs.json"
@@ -87,12 +87,10 @@ class InstanceSet:
 		self.ignore_instance_ids = IGNORE_INSTANCE_IDS
 
 		self.cost_dict = {}
-
 		self.initial = True
-
 		self.metrics = InstanceSetMetrics()
-
 		self.lock = Lock()
+		self.manage = manage
 
 		self.update_instance_info()
 		self.strat = SimpleStrategy(avg_num_hot=len(self.hot_instances) + len(self.loading_instances) + len(self.cold_instances))
@@ -101,7 +99,6 @@ class InstanceSet:
 			self.instance_config = json.load(f)
 
 		self.exit_event = Event()
-		self.manage = manage
 		self.manage_threads = []
 		self.p1 = Thread(target=self.update_and_manage_background, args=(self.exit_event, self.manage,))
 		self.p1.start()
@@ -208,7 +205,8 @@ class InstanceSet:
 		self.lock.release()
 
 		# self.bad_instance_ids += self.find_error_instances()
-		self.update_ready_instances()
+		if self.manage:
+			self.update_ready_instances()
 		# self.update_costs()
 		# self.cost_safety_check()
 
@@ -262,10 +260,11 @@ class InstanceSet:
 	def test_ready_instance(self, instance):
 		addr = get_address(instance)
 		response = format_prompt_request(addr, TEST_PROMPT, 10)
-		if response is not None:
-			return True
-		else:
-			return False
+		if response["reply"] is not None:
+			reply = response["reply"].replace('\n', ' ')
+			if reply == "What? The 2018 midterm elections":
+				return True
+		return False
 
 	def update_ready_instances(self): #might want to take into account issue where a previous instance is no longer ready
 		self.lock.acquire()
@@ -432,24 +431,20 @@ class InstanceSet:
 	def start_instance(self, instance_id):
 		if instance_id in self.ignore_instance_ids:
 			return
-		# print("starting instance: {}".format(instance_id))
 		result = subprocess.run(["vastai", "start", "instance", str(instance_id), "--raw"], capture_output=True)
 		if "starting instance" in result.stdout.decode('utf-8'):
 			return True
 		else:
-			print(result.stdout.decode('utf-8'))
 			return False
 
 	def stop_instance(self, instance_id):
 		if instance_id in self.ignore_instance_ids:
 			return
-		# print("stopping instance {}".format(instance_id))
 		result = subprocess.run(["vastai", "stop", "instance", str(instance_id), "--raw"], capture_output=True)
 		return True
 
 	def create_instance(self, instance_id, model="13"):
 		config = self.instance_config[model]["create"]
-		# print("creating instance {}".format(instance_id))
 		args = f" --onstart {config['onstart']} --image {config['image']} --disk {config['disk']}"
 		result = subprocess.run([f"vastai create instance {str(instance_id)}" + args + " --raw"], shell=True, capture_output=True)
 		if result is not None and result.stdout.decode('utf-8') is not None:
@@ -464,10 +459,7 @@ class InstanceSet:
 	def destroy_instance(self, instance_id: float):
 		if instance_id in self.ignore_instance_ids:
 			return
-		print("destroying instance {}".format(instance_id))
 		result = subprocess.run(["vastai", "destroy", "instance", str(instance_id), "--raw"], capture_output=True)
-		# response = result.stdout.decode('utf-8')
-		# print(response)
 		return True
 
 	def destroy_all_instances(self):
