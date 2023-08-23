@@ -2,7 +2,7 @@ import random
 import time
 from threading import Thread, Lock, Event
 from concurrent.futures import ThreadPoolExecutor
-from client import Client
+from loadbalancer_client import Client
 import uuid
 
 MAX_CONCURRENCY = 100
@@ -41,7 +41,6 @@ class Sim:
         self.bg = Thread(target=self.join_background, args=(self.exit_event, ))
         self.bg.start()
 
-    #called every so often to change user number and request probability
     def init_users(self):
         users = [] #blank it out
         user_prompts = random.choices(PROMPTS, weights=[0.3, 0.3, 0.3, 0.1], k=self.num_users)
@@ -104,7 +103,7 @@ class Sim:
 
 
 def main():
-    sim = Sim(num_iters=50, base_num_users=500, base_rate=1.0 * (10 / 60), etime=2.0)
+    sim = Sim(num_iters=300, base_num_users=200, base_rate=1.0 * (10 / 60), etime=2.0)
     sim.run()
 
 if __name__ == "__main__":

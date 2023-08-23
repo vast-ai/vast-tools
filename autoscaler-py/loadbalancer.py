@@ -3,7 +3,7 @@ from threading import Thread, Lock, Event
 import heapq
 import time
 
-from autoscaler import InstanceSet
+from autoscaler_client import Client
 
 TIME_INTERVAL_SECONDS = 5
 FULL_LOAD_THRESHOLD = 2.5
@@ -11,7 +11,7 @@ DEFAULT_TPS = 35.0
 
 class LoadBalancer:
 	def __init__(self, cold_set_size=0, manage=True):
-		self.instance_set = InstanceSet(cold_set_size, manage)
+		self.client = Client()
 
 		self.old_ready_ids = []
 		self.ready_queue = []
@@ -20,24 +20,16 @@ class LoadBalancer:
 		self.lock = Lock()
 		self.exit_event = Event()
 
+		self.client.setup_autoscaler()
 		self.update_ready_queue()
 		self.bt = Thread(target=self.tick_background, args=(self.exit_event, ))
 		self.bt.start()
 
-	def deconstruct(self, kill_servers=False):
-		print("[loadbalancer] deconstructing")
-		self.instance_set.deconstruct()
-		if kill_servers:
-			time.sleep(5)
-			self.instance_set.destroy_all_instances()
-		self.exit_event.set()
-		self.bt.join()
-
 	def update_ready_queue(self):
-		self.instance_set.lock.acquire()
-		ready_instances = self.instance_set.ready_instances
-		self.instance_set.lock.release()
-
+		t1 = time.time()
+		ready_instances = self.client.get_ready_instances()
+		t2 = time.time()
+		print(f"[loadbalancer] got ready instances in: {t2 - t1}")
 		self.lock.acquire()
 		ready_queue = []
 		ready_ids = []
@@ -48,7 +40,6 @@ class LoadBalancer:
 		self.ready_queue = ready_queue
 		self.old_ready_ids
 		self.lock.release()
-		# print("[loadbalancer] ready queue has len: {}".format(len(self.ready_queue)))
 
 	def tick_duration(self):
 		self.lock.acquire()
@@ -73,16 +64,23 @@ class LoadBalancer:
 
 		print(f"[loadbalancer] ticking duration with {len(self.ready_queue)} ready and {avg_duration} avg duration")
 		self.old_ready_ids = ready_ids
-		self.instance_set.lock.acquire()
-		self.instance_set.num_busy = num_busy
-		self.instance_set.num_hot = num_ready
-		self.instance_set.lock.release()
+		self.client.report_hot_busy(num_hot=num_ready, num_busy=num_busy)
 		self.lock.release()
 
 	def tick_background(self, event):
+		prev_time = time.time()
 		while not event.is_set():
+			curr_time = time.time()
+			print(f"[loadbalancer] ticking with interval: {curr_time - prev_time}")
+			prev_time = curr_time
+			t1 = time.time()
 			self.update_ready_queue()
+			t2 = time.time()
+			print(f"[loadbalancer] updated ready queue in: {t2 - t1}")
+			t1 = time.time()
 			self.tick_duration()
+			t2 = time.time()
+			print(f"[loadbalancer] ticked duration in: {t2 - t1}")
 			time.sleep(TIME_INTERVAL_SECONDS)
 
 	def get_address(self, instance):
@@ -107,4 +105,10 @@ class LoadBalancer:
 		self.lock.release()
 		# print(f"[loadbalancer] next addr is: {addr} on instance: {id}")
 		return addr
+
+	def deconstruct(self, kill_servers=False):
+		print("[loadbalancer] deconstructing")
+		self.client.destroy_autoscaler()
+		self.exit_event.set()
+		self.bt.join()
 

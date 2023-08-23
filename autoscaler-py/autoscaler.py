@@ -87,7 +87,6 @@ class InstanceSet:
 		self.ignore_instance_ids = IGNORE_INSTANCE_IDS
 
 		self.cost_dict = {}
-		self.initial = True
 		self.metrics = InstanceSetMetrics()
 		self.lock = Lock()
 		self.manage = manage
@@ -157,14 +156,14 @@ class InstanceSet:
 	# 	self.metrics.lock.release()
 	# 	self.lock.release()
 
-	def cost_safety_check(self):
-		self.metrics.lock.acquire()
-		hot_idx = 0
-		while (self.metrics.curr_cost_per_hour > MAX_COST_PER_HOUR) and (hot_idx < len(self.hot_instances)):
-			self.stop_instance(self.hot_instances[hot_idx]["id"])
-			self.metrics.curr_cost_per_hour -= self.hot_instances[hot_idx]["dph_base"]
-			hot_idx += 1
-		self.metrics.lock.release()
+	# def cost_safety_check(self):
+	# 	self.metrics.lock.acquire()
+	# 	hot_idx = 0
+	# 	while (self.metrics.curr_cost_per_hour > MAX_COST_PER_HOUR) and (hot_idx < len(self.hot_instances)):
+	# 		self.stop_instance(self.hot_instances[hot_idx]["id"])
+	# 		self.metrics.curr_cost_per_hour -= self.hot_instances[hot_idx]["dph_base"]
+	# 		hot_idx += 1
+	# 	self.metrics.lock.release()
 
 	def update_and_manage_background(self, event, manage=True):
 		while not event.is_set():
@@ -300,7 +299,6 @@ class InstanceSet:
 		self.manage_threads = []
 
 	def manage_instances(self):
-		# self.manage_join()
 		self.lock.acquire()
 
 		print("[autoscaler] dealing with bad instances")
@@ -408,7 +406,7 @@ class InstanceSet:
 			self.create_instance(next(ask_list_iter)['id'], model)
 
 	def act_on_instances(self, action, num_instances, instance_list):
-		print(f"calling {action.__name__} on {num_instances} instances")
+		print(f"[autoscaler] calling {action.__name__} on {num_instances} instances, len(instance_list): {len(instance_list)}")
 		# num_instances = min(num_instances, MAX_CONCURRENCY) #safety catch
 		if instance_list is None or len(instance_list) == 0:
 			return
@@ -426,7 +424,7 @@ class InstanceSet:
 					if result:
 						num_remaining -= 1
 
-		print(f"sucessfully called {action.__name__} on {num_instances - num_remaining} instances")
+		print(f"[autoscaler] sucessfully called {action.__name__} on {num_instances - num_remaining} instances")
 
 	def start_instance(self, instance_id):
 		if instance_id in self.ignore_instance_ids:
