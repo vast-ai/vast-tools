@@ -103,7 +103,7 @@ class Sim:
 
 
 def main():
-    sim = Sim(num_iters=300, base_num_users=200, base_rate=1.0 * (10 / 60), etime=2.0)
+    sim = Sim(num_iters=20, base_num_users=30, base_rate=1.0 * (10 / 60), etime=2.0)
     sim.run()
 
 if __name__ == "__main__":

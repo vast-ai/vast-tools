@@ -129,15 +129,6 @@ class Client:
 		self.lb_server_addr = '127.0.0.1:5000'
 		self.auto_server_addr = '127.0.0.1:8000'
 
-	# def init_cold_set(self, cold_set_size):
-	# 	request_dict = {"cold_set_size" : cold_set_size}
-	# 	URI = f'http://{self.lb_server_addr}/cold'
-	# 	response = requests.post(URI, json=request_dict)
-	# 	if response.status_code == 200:
-	# 		print("[client] cold set creation succeeded")
-	# 	else:
-	# 		print("[client] cold set creation succeeded failed")
-
 	def setup_lb(self):
 		URI = f'http://{self.lb_server_addr}/setup'
 		response = requests.post(URI)
@@ -188,8 +179,9 @@ class Client:
 
 		if response.status_code == 200 and response.json()["addr"] is not None:
 			gpu_addr = response.json()["addr"]
+			id_token = response.json()["token"]
 			start_time = time.time()
-			gpu_response = format_prompt_request(gpu_addr, text_prompt, num_tokens)
+			gpu_response = format_prompt_request(gpu_addr, id_token, text_prompt, num_tokens)
 			end_time = time.time()
 			time_elapsed = end_time - start_time
 			success = (gpu_response["reply"] is not None)
@@ -224,27 +216,9 @@ class Client:
 			num_hot = self.get_status()["num_hot"]
 		print("[client] server now ready")
 
-	def create_cold_set(self, cold_set_size):
-		self.init_cold_set(cold_set_size)
-		num_cold = 0
-		iters = 0
-		while num_cold < cold_set_size:
-			time.sleep(WAIT_INTERVAL)
-			status = self.get_status()
-			if status:
-				print("[client] status update:")
-				for k, v in status.items():
-					print(f"{k} : {v}")
-				num_cold = status["num_cold"]
-			if iters % 5 == 0:
-				self.get_metrics()
-				print(f"current cost: {self.metrics.total_cost}")
-			iters += 1
-		self.shutdown_lb()
 
 def main():
-	c = Client()
-	c.create_cold_set(100)
+	pass
 
 if __name__ == "__main__":
 	main()

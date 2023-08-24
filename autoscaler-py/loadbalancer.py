@@ -1,21 +1,26 @@
 from collections import defaultdict
 from threading import Thread, Lock, Event
+from concurrent.futures import ThreadPoolExecutor, wait
 import heapq
 import time
 
 from autoscaler_client import Client
+from instance_client import InstanceClient
 
 TIME_INTERVAL_SECONDS = 5
 FULL_LOAD_THRESHOLD = 2.5
 DEFAULT_TPS = 35.0
+MAX_CONCURRENCY = 100
 
 class LoadBalancer:
 	def __init__(self, cold_set_size=0, manage=True):
 		self.client = Client()
 
-		self.old_ready_ids = []
+		self.old_ready_ids = [] #need a better system to delay busy classification of new instances
 		self.ready_queue = []
+		self.num_ready = 0
 		self.queue_duration = defaultdict(int)
+		self.instance_clients = {}
 
 		self.lock = Lock()
 		self.exit_event = Event()
@@ -33,12 +38,30 @@ class LoadBalancer:
 		self.lock.acquire()
 		ready_queue = []
 		ready_ids = []
+		num_ready = 0
 		for ready_instance in ready_instances:
-			heapq.heappush(ready_queue, (self.queue_duration[ready_instance["id"]], ready_instance["id"], ready_instance))
-			ready_ids.append(ready_instance["id"])
+			id = ready_instance["id"]
+			if id in self.old_ready_ids:
+				num_ready += 1
+			else:
+				self.instance_clients[id] = InstanceClient(self.get_address(ready_instance), ready_instance["mtoken"])
+
+			heapq.heappush(ready_queue, (self.queue_duration[id], id, ready_instance))
+			ready_ids.append(id)
 
 		self.ready_queue = ready_queue
-		self.old_ready_ids
+		self.old_ready_ids = ready_ids
+		self.num_ready = num_ready
+		self.lock.release()
+
+	#needs to keep track of how many tokens it has per GPU
+	def monitor_instance_clients(self):
+		self.lock.acquire()
+
+		with ThreadPoolExecutor(MAX_CONCURRENCY) as e:
+			futures = [e.submit(c.monitor_token_queue) for c in self.instance_clients.values()]
+			wait(futures) #not sure if we need to wait here
+
 		self.lock.release()
 
 	def tick_duration(self):
@@ -52,8 +75,6 @@ class LoadBalancer:
 			prev_queue_duration = self.queue_duration[instance['id']]
 			curr_queue_duration = max(0, prev_queue_duration - TIME_INTERVAL_SECONDS)
 			self.queue_duration[instance['id']] = curr_queue_duration
-			if instance["id"] in self.old_ready_ids:
-				num_ready += 1
 			tot_duration += curr_queue_duration
 			# print("[loadbalancer] instance: {} has queue duration: {}".format(instance['id'], curr_queue_duration))
 
@@ -63,8 +84,7 @@ class LoadBalancer:
 		num_busy = int(busy_level * num_ready)
 
 		print(f"[loadbalancer] ticking duration with {len(self.ready_queue)} ready and {avg_duration} avg duration")
-		self.old_ready_ids = ready_ids
-		self.client.report_hot_busy(num_hot=num_ready, num_busy=num_busy)
+		self.client.report_hot_busy(num_hot=self.num_ready, num_busy=num_busy)
 		self.lock.release()
 
 	def tick_background(self, event):
@@ -81,6 +101,10 @@ class LoadBalancer:
 			self.tick_duration()
 			t2 = time.time()
 			print(f"[loadbalancer] ticked duration in: {t2 - t1}")
+			t1 = time.time()
+			self.monitor_instance_clients()
+			t2 = time.time()
+			print(f"[loadbalancer] monitored instance clients in: {t2 - t1}")
 			time.sleep(TIME_INTERVAL_SECONDS)
 
 	def get_address(self, instance):
@@ -94,7 +118,8 @@ class LoadBalancer:
 		if len(self.ready_queue) != 0:
 			(_, _, ready_server) = heapq.heappop(self.ready_queue)
 			addr = self.get_address(ready_server)
-			id = ready_server["id"]
+			token_queue = self.instance_clients[ready_server["id"]].token_queue
+			token = token_queue.get()
 			# if "tokens/s" in ready_server.keys():
 			# 	tps = ready_server["tokens/s"]
 			# else:
@@ -104,7 +129,7 @@ class LoadBalancer:
 			heapq.heappush(self.ready_queue, (self.queue_duration[ready_server["id"]], ready_server["id"], ready_server))
 		self.lock.release()
 		# print(f"[loadbalancer] next addr is: {addr} on instance: {id}")
-		return addr
+		return addr, token
 
 	def deconstruct(self, kill_servers=False):
 		print("[loadbalancer] deconstructing")

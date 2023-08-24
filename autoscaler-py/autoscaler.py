@@ -4,13 +4,14 @@ from concurrent.futures import ThreadPoolExecutor
 import time
 import re
 import json
+import secrets
 import os
 from ratio_manager import update_rolling_average
 from prompt_OOBA import format_prompt_request
 
 TIME_INTERVAL_SECONDS = 5
 MAX_COST_PER_HOUR = 10.0
-MAX_CONCURRENCY = 100 #for concurrency concerns
+MAX_CONCURRENCY = 100
 INSTANCE_CONFIG_NAME = "OOBA_configs.json"
 IGNORE_INSTANCE_IDS = []
 BAD_MACHINE_IDS = [4424]
@@ -82,6 +83,7 @@ class InstanceSet:
 		self.loading_instances = []
 		self.cold_instances = [] #assumption is that all cold instances are available to be started
 
+		self.instance_info_map = {}
 		self.started_instance_ids = []
 		self.bad_instance_ids = []
 		self.ignore_instance_ids = IGNORE_INSTANCE_IDS
@@ -91,7 +93,7 @@ class InstanceSet:
 		self.lock = Lock()
 		self.manage = manage
 
-		self.update_instance_info()
+		self.update_instance_info(manage=self.manage, init=True)
 		self.strat = SimpleStrategy(avg_num_hot=len(self.hot_instances) + len(self.loading_instances) + len(self.cold_instances))
 
 		with open(INSTANCE_CONFIG_NAME, "r") as f:
@@ -131,52 +133,28 @@ class InstanceSet:
 		# 	with open(f"instance_info/{instance['machine_id']}.json", "w") as f:
 		# 		json.dump(instance, f)
 
-	# def update_costs(self):
-	# 	self.lock.acquire()
-	# 	self.metrics.lock.acquire()
-
-	# 	curr_cost_per_hour = 0.0
-	# 	total_add_cost = 0.0
-	# 	for instance in self.hot_instances:
-	# 		curr_cost_per_hour += instance["dph_total"]
-	# 		new_instance_cost = instance["dph_total"] * (instance["duration"] / (60 * 60))
-	# 		new_inet_cost = instance["inet_up_cost"] + instance["inet_down_cost"]
-	# 		new_cost = new_instance_cost + new_inet_cost
-	# 		if instance["id"] in self.cost_dict.keys():
-	# 			add_cost = new_cost - self.cost_dict[instance["id"]]
-	# 		else:
-	# 			add_cost = new_cost
-
-	# 		self.cost_dict[instance["id"]] = new_cost
-	# 		total_add_cost += add_cost
-
-	# 	self.metrics.curr_cost_per_hour = curr_cost_per_hour
-	# 	self.metrics.total_cost += total_add_cost
-
-	# 	self.metrics.lock.release()
-	# 	self.lock.release()
-
-	# def cost_safety_check(self):
-	# 	self.metrics.lock.acquire()
-	# 	hot_idx = 0
-	# 	while (self.metrics.curr_cost_per_hour > MAX_COST_PER_HOUR) and (hot_idx < len(self.hot_instances)):
-	# 		self.stop_instance(self.hot_instances[hot_idx]["id"])
-	# 		self.metrics.curr_cost_per_hour -= self.hot_instances[hot_idx]["dph_base"]
-	# 		hot_idx += 1
-	# 	self.metrics.lock.release()
 
 	def update_and_manage_background(self, event, manage=True):
 		while not event.is_set():
 			print("[autoscaler] ticking")
-			self.update_instance_info()
+			self.update_instance_info(manage, init=False)
 			if manage:
 				self.manage_instances()
 			time.sleep(TIME_INTERVAL_SECONDS)
 
-	def update_instance_info(self):
+	def update_instance_info(self, manage, init):
 		curr_instances = self.get_curr_instances()
 		if curr_instances is None:
 			return
+
+		if init:
+			for instance in curr_instances:
+				id = instance["id"]
+				filepath = f"instance_info/{id}.json"
+				if os.path.exists(filepath):
+					with open(filepath, "r") as f:
+						instance_log = json.load(f)
+						self.instance_info_map[id] = instance_log
 
 		hot_instances = []
 		cold_instances = []
@@ -204,10 +182,8 @@ class InstanceSet:
 		self.lock.release()
 
 		# self.bad_instance_ids += self.find_error_instances()
-		if self.manage:
+		if manage:
 			self.update_ready_instances()
-		# self.update_costs()
-		# self.cost_safety_check()
 
 	def check_server_error(self, instance): #will hang, might need to find a faster way to do this
 		port_num = str(instance["ssh_port"])
@@ -246,51 +222,66 @@ class InstanceSet:
 		result = subprocess.run([ssh_string + command_string1], shell=True, capture_output=True)
 		result = subprocess.run([ssh_string + command_string2], shell=True, capture_output=True)
 
+	#!!! need better checking here for ssh permissions error !!!
 	def check_server_ready(self, instance): #could get notified by the server directly in the future
 		port_num = str(instance["ssh_port"])
 		host = instance["ssh_host"]
-		result = subprocess.run(["ssh", "-p", port_num, "-o", "StrictHostKeyChecking=no", "root@{}".format(host), "grep 'Starting API at http://0.0.0.0:5000/api' /app/onstart.log | tail -n 1"], capture_output=True)
+		# key_file = "vast-2"
+		ssh_string = f"ssh -p {port_num} -o StrictHostKeyChecking=no root@{host}"
+		command_string = "grep 'Starting API at http://127.0.0.1:5001/api' /app/onstart.log | tail -n 1"
+		result = subprocess.run([ssh_string + " " + command_string], shell=True, capture_output=True)
 		out = result.stdout
-		if out is not None and "Starting API at http://0.0.0.0:5000/api" in out.decode('utf-8'):
+		if out is not None and "Starting API at http://127.0.0.1:5001/api" in out.decode('utf-8'):
 			return True
 		else:
 			return False
 
-	def test_ready_instance(self, instance):
+	def test_ready_instance(self, instance, token):
 		addr = get_address(instance)
-		response = format_prompt_request(addr, TEST_PROMPT, 10)
+		response = format_prompt_request(addr, token, TEST_PROMPT, 10)
 		if response["reply"] is not None:
 			reply = response["reply"].replace('\n', ' ')
 			if reply == "What? The 2018 midterm elections":
 				return True
 		return False
 
-	def update_ready_instances(self): #might want to take into account issue where a previous instance is no longer ready
+	def update_ready_instances(self):
 		self.lock.acquire()
-		if len(self.hot_instances) == 0:
-			self.lock.release()
+		hot_instances = self.hot_instances
+		ready_instances = self.ready_instances
+		instance_info_map = self.instance_info_map
+		self.lock.release()
+
+		if len(hot_instances) == 0:
 			return
 
-		hot_but_not_ready = [i for i in self.hot_instances if i not in self.ready_instances]
+		hot_but_not_ready = [i for i in hot_instances if i not in ready_instances]
 		new_ready_instances = []
 		with ThreadPoolExecutor(MAX_CONCURRENCY) as e:
 			for instance, result in zip(hot_but_not_ready, e.map(self.check_server_ready, hot_but_not_ready)):
 				if result:
 					new_ready_instances.append(instance)
-
+		print(f"[autoscaler] initial num ready before testing: {len(new_ready_instances)}")
 		new_ready_instances_tested = []
+		new_ready_tokens = [instance_info_map[instance["id"]]["mtoken"] for instance in new_ready_instances]
 		with ThreadPoolExecutor(MAX_CONCURRENCY) as e:
-			for instance, result in zip(new_ready_instances, e.map(self.test_ready_instance, new_ready_instances)):
+			for instance, result in zip(new_ready_instances, e.map(self.test_ready_instance, new_ready_instances, new_ready_tokens)):
 				if result:
 					new_ready_instances_tested.append(instance)
 
-		self.ready_instances = [i for i in self.hot_instances if ((i in self.ready_instances) or (i in new_ready_instances_tested))] #gets rid of old ready instances that are no longer hot
+		print(f"[autoscaler] num ready after testing: {len(new_ready_instances_tested)}")
+		next_ready_instances = [i for i in hot_instances if ((i in ready_instances) or (i in new_ready_instances_tested))] #gets rid of old ready instances that are no longer hot
 
 		# if len(self.ready_instances) != 0:
 		# 	with ThreadPoolExecutor(len(self.ready_instances)) as e:
 		# 		# e.map(self.update_tokens_per_second, self.ready_instances)
 		# 		e.map(self.zero_ready_log, self.ready_instances)
 
+		for instance in next_ready_instances:
+			instance["mtoken"] = instance_info_map[instance["id"]]["mtoken"]
+
+		self.lock.acquire()
+		self.ready_instances = next_ready_instances
 		self.lock.release()
 
 	def manage_join(self):
@@ -325,6 +316,7 @@ class InstanceSet:
 		self.strat.avg_num_hot = num_hot_rolling
 		hot_ratio_rolling = (num_hot_rolling + 1) / (num_tot + 0.1)
 
+		print(f"[autoscaler] internal lists: len(self.hot_instances): {len(self.hot_instances)}, len(self.ready_instances): {len(self.ready_instances)}")
 		print("[autoscaler] managing instances: hot_busy_ratio: {}, hot_ratio: {}, hot_ratio_rolling: {}, num_hot: {}, num_busy: {}, num_cold_ready: {}, num_loading: {}, num_total: {}".format(hot_busy_ratio, hot_ratio, hot_ratio_rolling, num_hot, num_hot_busy, len(self.cold_instances), num_loading, num_tot))
 
 		#stop and start instances
@@ -360,8 +352,8 @@ class InstanceSet:
 			self.manage_threads.append(destroy_thread)
 			destroy_thread.start()
 
-		self.manage_join()
 		self.lock.release()
+		self.manage_join()
 
 	############################### vastai API Helper Functions ##########################################################
 
@@ -401,9 +393,7 @@ class InstanceSet:
 
 	def create_instances(self, num_instances, model="13"):
 		ask_list = self.get_asks(model=model)
-		ask_list_iter = iter(ask_list)
-		for _ in range(num_instances):
-			self.create_instance(next(ask_list_iter)['id'], model)
+		self.act_on_instances(self.create_instance, num_instances, ask_list)
 
 	def act_on_instances(self, action, num_instances, instance_list):
 		print(f"[autoscaler] calling {action.__name__} on {num_instances} instances, len(instance_list): {len(instance_list)}")
@@ -443,14 +433,20 @@ class InstanceSet:
 
 	def create_instance(self, instance_id, model="13"):
 		config = self.instance_config[model]["create"]
-		args = f" --onstart {config['onstart']} --image {config['image']} --disk {config['disk']}"
+		mtoken = secrets.token_hex(32)
+		args = f" --onstart {config['onstart']} --image {config['image']} --disk {config['disk']} --env '-e MTOKEN={mtoken}'" # --ssh --direct
 		result = subprocess.run([f"vastai create instance {str(instance_id)}" + args + " --raw"], shell=True, capture_output=True)
 		if result is not None and result.stdout.decode('utf-8') is not None:
 			try:
 				response = json.loads(result.stdout.decode('utf-8'))
 				if response["success"]:
 					new_id = response["new_contract"]
+					init_json = {"mtoken" : mtoken, "model_loaded" : None, "tps" : None}
+					self.instance_info_map[new_id] = init_json
+					with open(f"instance_info/{new_id}.json", "w") as f:
+						json.dump(init_json, f)
 					return new_id
+
 			except json.decoder.JSONDecodeError:
 				pass
 

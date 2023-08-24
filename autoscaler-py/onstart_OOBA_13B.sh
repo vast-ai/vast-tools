@@ -1,1 +1,11 @@
-env | grep _ >> /etc/environment; pip install accelerate -U; pip install protobuf; cd /src; /scripts/docker-entrypoint.sh python3 /app/download-model.py TheBloke/Llama-2-13B-chat-GPTQ --branch gptq-4bit-32g-actorder_True; python3 /app/server.py --extensions api --model TheBloke_Llama-2-13B-chat-GPTQ_gptq-4bit-32g-actorder_True --loader exllama --listen;
+env | grep _ >> /etc/environment;
+cd /src;
+if [ ! -f /root/hasbooted ]
+then
+    pip install accelerate -U; pip install protobuf;
+    git clone https://github.com/nickgreenspan/host-server;
+    python3 host-server/auth_server.py &
+    /scripts/docker-entrypoint.sh python3 /app/download-model.py TheBloke/Llama-2-13B-chat-GPTQ --branch gptq-4bit-32g-actorder_True;
+fi
+touch /root/hasbooted
+python3 /app/server.py --extensions api --model TheBloke_Llama-2-13B-chat-GPTQ_gptq-4bit-32g-actorder_True --loader exllama --api-blocking-port 5001

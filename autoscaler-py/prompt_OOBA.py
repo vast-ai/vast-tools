@@ -1,7 +1,7 @@
 import requests
 import json
 
-request_dict = {
+ooba_dict = {
 	'auto_max_new_tokens': False,
 
 	# Generation params. If 'preset' is set to different than 'None', the values
@@ -38,10 +38,12 @@ request_dict = {
 	'stopping_strings': []
 	}
 
-def format_prompt_request(gpu_server_addr, text_prompt, num_tokens):
-	URI = f'http://{gpu_server_addr}/api/v1/generate'
-	request_dict['prompt'] = text_prompt
-	request_dict['max_new_tokens'] = num_tokens
+def format_prompt_request(gpu_server_addr, id_token, text_prompt, num_tokens):
+	# URI = f'http://{gpu_server_addr}/api/v1/generate'
+	URI = f'http://{gpu_server_addr}/auth'
+	ooba_dict['prompt'] = text_prompt
+	ooba_dict['max_new_tokens'] = num_tokens
+	request_dict = {"token" : id_token, "ooba" : ooba_dict}
 	text_result = None
 	error = None
 	try:
@@ -60,10 +62,11 @@ def format_prompt_request(gpu_server_addr, text_prompt, num_tokens):
 	return {"reply" : text_result, "error": error}
 
 def main():
-	addr = "195.29.196.251:50011"
-	regular_prompt = "Please make suggestions to help me improve the following article: The Xá Lợi Pagoda raids were a series of synchronized attacks on various Buddhist pagodas in the major cities of South Vietnam shortly after midnight on 21 August 1963. The raids were executed by the Army of the Republic of Vietnam Special Forces under Colonel Lê Quang Tung, and combat police, both of which took their orders directly from Ngô Đình Nhu, younger brother of the Roman Catholic President Ngô Đình Diệm. Xá Lợi Pagoda, the largest pagoda in the South Vietnamese capital, Saigon, was the most prominent of the raided temples. Over 1,400 Buddhists were arrested, and estimates of the death toll and missing ranged up to the hundreds. In response to the Huế Vesak shootings and a ban on the Buddhist flag in early May, South Vietnam's Buddhist majority rose in widespread civil disobedience and protest against the religious bias and discrimination of the Catholic-dominated Diệm government. Buddhist temples in major cities, most prominently the Xá Lợi pagoda, became focal points for protesters and assembly points for Buddhist monks from rural areas."
-	response = format_prompt_request(addr, regular_prompt, 200)
-	print(response)
+	pass
+	# addr = "195.29.196.251:50011"
+	# regular_prompt = "What is your name?"
+	# response = format_prompt_request(addr, regular_prompt, 200)
+	# print(response)
 
 if __name__ == "__main__":
 	main()

@@ -35,9 +35,9 @@ def destroy_lb():
 def get_connection():
     global lb
     data = request.json
-    addr = lb.get_next_addr(data["num_tokens"])
-    return {"addr" : addr}
+    addr, token = lb.get_next_addr(data["num_tokens"])
+    return {"addr" : addr, "token": token}
 
-
-
+if __name__ == '__main__':
+    app.run(threaded=False, port=5000) #think about how to support multi-threading safety
 
