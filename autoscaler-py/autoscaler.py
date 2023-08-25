@@ -142,25 +142,36 @@ class InstanceSet:
 				self.manage_instances()
 			time.sleep(TIME_INTERVAL_SECONDS)
 
+	def read_instance_json(self, instance):
+		id = instance["id"]
+		filepath = f"instance_info/{id}.json"
+		if os.path.exists(filepath):
+			with open(filepath, "r") as f:
+				instance_log = json.load(f)
+				self.instance_info_map[id] = instance_log
+				return True
+		else:
+			return False
+
+
 	def update_instance_info(self, manage, init):
 		curr_instances = self.get_curr_instances()
 		if curr_instances is None:
 			return
 
 		if init:
-			for instance in curr_instances:
-				id = instance["id"]
-				filepath = f"instance_info/{id}.json"
-				if os.path.exists(filepath):
-					with open(filepath, "r") as f:
-						instance_log = json.load(f)
-						self.instance_info_map[id] = instance_log
+			for instance in curr_instances: #could parallelize
+				self.read_instance_json(instance)
 
 		hot_instances = []
 		cold_instances = []
 		loading_instances = []
 
 		for instance in curr_instances:
+			if instance["id"] not in self.instance_info_map.keys():
+				if not (self.read_instance_json(instance)):
+					self.bad_instance_ids.append(instance['id'])
+					continue
 			if (instance['actual_status'] == 'offline') or (instance['status_msg'] is not None and 'Error response from daemon' in instance['status_msg']) or (instance['machine_id'] in BAD_MACHINE_IDS):
 				self.bad_instance_ids.append(instance['id'])
 			elif instance['actual_status'] == 'running':
@@ -239,6 +250,7 @@ class InstanceSet:
 	def test_ready_instance(self, instance, token):
 		addr = get_address(instance)
 		response = format_prompt_request(addr, token, TEST_PROMPT, 10)
+		# print(response)
 		if response["reply"] is not None:
 			reply = response["reply"].replace('\n', ' ')
 			if reply == "What? The 2018 midterm elections":
@@ -326,34 +338,38 @@ class InstanceSet:
 			#maybe I can filter for idle here
 			hot_instances = self.hot_instances[::-1]
 			stop_thread = Thread(target=self.act_on_instances, args=(self.stop_instance, count, hot_instances))
-			self.manage_threads.append(stop_thread)
+			# self.manage_threads.append(stop_thread)
 			stop_thread.start()
+			stop_thread.join()
 
 		elif hot_busy_ratio >= self.strat.target_hot_busy_ratio_upper:
 			print("[autoscaler] hot busy ratio too high!")
 			count = int((hot_busy_ratio / self.strat.target_hot_busy_ratio_upper) * max(num_hot, 1)) - num_hot
 			start_thread = Thread(target=self.act_on_instances, args=(self.start_instance, count, self.cold_instances))
-			self.manage_threads.append(start_thread)
+			# self.manage_threads.append(start_thread)
 			start_thread.start()
+			start_thread.join()
 
 		#create and destroy instances
 		if hot_ratio > self.strat.target_hot_ratio:
 			print("[autoscaler] hot ratio too high!")
 			count = int((hot_ratio / self.strat.target_hot_ratio) * max(num_tot, 1)) - num_tot
 			create_thread = Thread(target=self.act_on_instances, args=(self.create_instance, count, self.get_asks(budget=True)))
-			self.manage_threads.append(create_thread)
+			# self.manage_threads.append(create_thread)
 			create_thread.start()
+			create_thread.join()
 
 		elif hot_ratio_rolling < self.strat.target_hot_ratio:
 			print("[autoscaler] hot ratio too low!")
 			count = num_tot - int((hot_ratio_rolling / self.strat.target_hot_ratio) * max(num_tot, 1))
 			cold_instances = self.cold_instances[::-1]
 			destroy_thread = Thread(target=self.act_on_instances, args=(self.destroy_instance, count, cold_instances))
-			self.manage_threads.append(destroy_thread)
+			# self.manage_threads.append(destroy_thread)
 			destroy_thread.start()
+			destroy_thread.join()
 
 		self.lock.release()
-		self.manage_join()
+		# self.manage_join()
 
 	############################### vastai API Helper Functions ##########################################################
 
@@ -395,9 +411,11 @@ class InstanceSet:
 		ask_list = self.get_asks(model=model)
 		self.act_on_instances(self.create_instance, num_instances, ask_list)
 
+	def start_instances(self, num_instances):
+		self.act_on_instances(self.start_instance, num_instances, self.cold_instances)
+
 	def act_on_instances(self, action, num_instances, instance_list):
 		print(f"[autoscaler] calling {action.__name__} on {num_instances} instances, len(instance_list): {len(instance_list)}")
-		# num_instances = min(num_instances, MAX_CONCURRENCY) #safety catch
 		if instance_list is None or len(instance_list) == 0:
 			return
 
@@ -405,16 +423,19 @@ class InstanceSet:
 			id_list = list(map(get_instance_id, instance_list))
 		else:
 			id_list = instance_list
-		num_remaining = num_instances
-		while num_remaining > 0 and num_remaining <= len(id_list):
-			curr_ids = id_list[:num_remaining]
-			id_list = id_list[num_remaining:]
+
+		num_acted = 0
+		batch_idx = num_instances
+		while num_acted < num_instances and len(id_list) > 0:
+			batch_idx = min(batch_idx, len(id_list))
+			curr_ids = id_list[:batch_idx]
+			id_list = id_list[batch_idx:]
 			with ThreadPoolExecutor(MAX_CONCURRENCY) as e:
 				for result in e.map(action, curr_ids):
 					if result:
-						num_remaining -= 1
+						num_acted += 1
 
-		print(f"[autoscaler] sucessfully called {action.__name__} on {num_instances - num_remaining} instances")
+		print(f"[autoscaler] sucessfully called {action.__name__} on {num_acted} instances")
 
 	def start_instance(self, instance_id):
 		if instance_id in self.ignore_instance_ids:

@@ -11,6 +11,7 @@ WAIT_INTERVAL = 20
 
 class ClientMetrics:
 	def __init__(self):
+
 		self.num_requests_finished = 0
 		self.num_requests_successful = 0
 		self.total_tokens_requested = 0
@@ -101,6 +102,7 @@ class ClientMetrics:
 		print("-----------------------------------------------------")
 		print("number of requests finished: {}".format(self.num_requests_finished))
 		print("number of requests successful: {}".format(self.num_requests_successful))
+		print("number of times serverless server was busy: {}".format(self.num_serverless_server_busy))
 		print(f"reliability ratio: {self.num_requests_successful / self.num_requests_finished}")
 
 		print("number of tokens requested: {}".format(self.total_tokens_requested))

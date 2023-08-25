@@ -62,11 +62,11 @@ def format_prompt_request(gpu_server_addr, id_token, text_prompt, num_tokens):
 	return {"reply" : text_result, "error": error}
 
 def main():
-	pass
-	# addr = "195.29.196.251:50011"
-	# regular_prompt = "What is your name?"
-	# response = format_prompt_request(addr, regular_prompt, 200)
-	# print(response)
+	addr = "127.0.0.1:5000"
+	id_token = "mtoken"
+	regular_prompt = "What is your name?"
+	response = format_prompt_request(addr, id_token, regular_prompt, 200)
+	print(response)
 
 if __name__ == "__main__":
 	main()
