@@ -38,6 +38,26 @@ ooba_dict = {
 	'stopping_strings': []
 	}
 
+def send_vllm_request(gpu_server_addr, text_prompt):
+	URI = f'http://{gpu_server_addr}/generate'
+	request_dict = {"prompt" : text_prompt}
+	text_result = None
+	error = None
+	num_tokens = None
+	try:
+		response = requests.post(URI, json=request_dict)
+		if response.status_code == 200:
+			reply = response.json()
+			if reply["error"] is None:
+				text_result = f"{text_prompt} -> {reply['response']}"
+				num_tokens = reply["num_tokens"]
+			else:
+				error = reply['error']
+	except requests.exceptions.ConnectionError as e:
+		error = f"connection error: {e}"
+
+	return {"reply" : text_result, "error": error, "num_tokens" : num_tokens}
+
 def format_prompt_request(gpu_server_addr, id_token, text_prompt, num_tokens):
 	# URI = f'http://{gpu_server_addr}/api/v1/generate'
 	URI = f'http://{gpu_server_addr}/auth'
@@ -62,11 +82,12 @@ def format_prompt_request(gpu_server_addr, id_token, text_prompt, num_tokens):
 	return {"reply" : text_result, "error": error}
 
 def main():
-	addr = "127.0.0.1:5000"
-	id_token = "mtoken"
+	addr = "89.37.121.214:48271"
+	# id_token = "mtoken"
 	regular_prompt = "What is your name?"
-	response = format_prompt_request(addr, id_token, regular_prompt, 200)
-	print(response)
+	# response = format_prompt_request(addr, id_token, regular_prompt, 200)
+	# print(response)
+	send_vllm_request(addr, regular_prompt)
 
 if __name__ == "__main__":
 	main()

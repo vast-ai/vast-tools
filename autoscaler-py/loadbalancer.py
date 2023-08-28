@@ -1,7 +1,7 @@
 from collections import defaultdict
 from threading import Thread, Lock, Event
 from concurrent.futures import ThreadPoolExecutor, wait
-import heapq
+from queue import PriorityQueue
 import time
 
 from autoscaler_client import Client
@@ -17,7 +17,7 @@ class LoadBalancer:
 		self.client = Client()
 
 		self.old_ready_ids = [] #need a better system to delay busy classification of new instances
-		self.ready_queue = []
+		self.ready_queue = PriorityQueue()
 		self.num_ready = 0
 		self.queue_duration = defaultdict(int)
 		self.instance_clients = {}
@@ -36,7 +36,10 @@ class LoadBalancer:
 		t2 = time.time()
 		print(f"[loadbalancer] got ready instances in: {t2 - t1}")
 		self.lock.acquire()
-		ready_queue = []
+		queue_duration = self.queue_duration
+		self.lock.release()
+
+		ready_queue = PriorityQueue()
 		ready_ids = []
 		num_ready = 0
 		for ready_instance in ready_instances:
@@ -44,11 +47,12 @@ class LoadBalancer:
 			if id in self.old_ready_ids:
 				num_ready += 1
 			else:
-				self.instance_clients[id] = InstanceClient(self.get_address(ready_instance), ready_instance["mtoken"])
+				self.instance_clients[id] = InstanceClient(ready_instance["id"], self.get_address(ready_instance), ready_instance["mtoken"])
 
-			heapq.heappush(ready_queue, (self.queue_duration[id], id, ready_instance))
+			ready_queue.put((queue_duration[id], id, ready_instance))
 			ready_ids.append(id)
 
+		self.lock.acquire()
 		self.ready_queue = ready_queue
 		self.old_ready_ids = ready_ids
 		self.num_ready = num_ready
@@ -56,29 +60,23 @@ class LoadBalancer:
 
 	#needs to keep track of how many tokens it has per GPU
 	def monitor_instance_clients(self):
-		self.lock.acquire()
-
 		with ThreadPoolExecutor(MAX_CONCURRENCY) as e:
 			futures = [e.submit(c.monitor_token_queue) for c in self.instance_clients.values()]
 			wait(futures) #not sure if we need to wait here
 
-		self.lock.release()
-
 	def tick_duration(self):
 		self.lock.acquire()
+
 		tot_duration = 0
 		num_ready = 0
-		ready_ids = []
 
-		for (_, _, instance) in list(self.ready_queue):
-			ready_ids.append(instance["id"])
-			prev_queue_duration = self.queue_duration[instance['id']]
+		for ready_id in list(self.old_ready_ids):
+			prev_queue_duration = self.queue_duration[ready_id]
 			curr_queue_duration = max(0, prev_queue_duration - TIME_INTERVAL_SECONDS)
-			self.queue_duration[instance['id']] = curr_queue_duration
+			self.queue_duration[ready_id] = curr_queue_duration
 			tot_duration += curr_queue_duration
-			# print("[loadbalancer] instance: {} has queue duration: {}".format(instance['id'], curr_queue_duration))
 
-		num_soon_ready = len(self.ready_queue)
+		num_soon_ready = self.ready_queue.qsize()
 		avg_duration = tot_duration / num_soon_ready if num_soon_ready != 0 else 0
 		busy_level = avg_duration / FULL_LOAD_THRESHOLD
 		num_busy = int(busy_level * num_ready)
@@ -116,17 +114,14 @@ class LoadBalancer:
 		addr = None
 		self.lock.acquire()
 		if len(self.ready_queue) != 0:
-			(_, _, ready_server) = heapq.heappop(self.ready_queue)
+			(work_time, _, ready_server) = self.ready_queue.get()
 			addr = self.get_address(ready_server)
 			token_queue = self.instance_clients[ready_server["id"]].token_queue
 			token = token_queue.get()
-			# if "tokens/s" in ready_server.keys():
-			# 	tps = ready_server["tokens/s"]
-			# else:
-			# 	tps = DEFAULT_TPS
+			print(f"[loadbalancer] got token for instance id: {ready_server['id']}, and token qsize: {token_queue.qsize()}")
 			tps = DEFAULT_TPS
 			self.queue_duration[ready_server["id"]] += ((1 / tps) * num_tokens)
-			heapq.heappush(self.ready_queue, (self.queue_duration[ready_server["id"]], ready_server["id"], ready_server))
+			self.ready_queue.put((self.queue_duration[ready_server["id"]], ready_server["id"], ready_server))
 		self.lock.release()
 		# print(f"[loadbalancer] next addr is: {addr} on instance: {id}")
 		return addr, token

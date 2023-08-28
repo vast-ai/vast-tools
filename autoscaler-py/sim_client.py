@@ -5,7 +5,7 @@ from collections import defaultdict
 import subprocess
 import json
 
-from prompt_OOBA import format_prompt_request
+from prompt_OOBA import format_prompt_request, send_vllm_request
 
 WAIT_INTERVAL = 20
 
@@ -130,6 +130,7 @@ class Client:
 		self.metrics = ClientMetrics()
 		self.lb_server_addr = '127.0.0.1:5000'
 		self.auto_server_addr = '127.0.0.1:8000'
+		self.vllm_server_addr = '89.37.121.214:48271'
 
 	def setup_lb(self):
 		URI = f'http://{self.lb_server_addr}/setup'
@@ -170,6 +171,15 @@ class Client:
 		self.metrics.num_serverless_server_busy += 1
 		self.metrics.lock.release()
 
+	def send_prompt_vllm_server(self, text_prompt):
+		start_time = time.time()
+		gpu_response = send_vllm_request(self.vllm_server_addr, text_prompt)
+		end_time = time.time()
+		time_elapsed = end_time - start_time
+		success = (gpu_response["reply"] is not None)
+		self.update_metrics(self.vllm_server_addr, success, gpu_response["num_tokens"], time_elapsed)
+
+
 	def send_prompt(self, text_prompt, num_tokens, request_num):
 		request_dict = {"num_tokens" : num_tokens}
 		URI = f'http://{self.lb_server_addr}/connect'
@@ -184,6 +194,7 @@ class Client:
 			id_token = response.json()["token"]
 			start_time = time.time()
 			gpu_response = format_prompt_request(gpu_addr, id_token, text_prompt, num_tokens)
+			print(gpu_response["reply"])
 			end_time = time.time()
 			time_elapsed = end_time - start_time
 			success = (gpu_response["reply"] is not None)
@@ -191,17 +202,17 @@ class Client:
 		else:
 			self.metrics_report_busy()
 
-	def get_metrics(self):
-		URI = f'http://{self.auto_server_addr}/metrics'
-		response = requests.get(URI)
-		if response.status_code == 200:
-			response = response.json()
-			self.metrics.lock.acquire()
-			self.metrics.total_cost = response["total_cost"]
-			reported_tps_dict = response["reported_tps"]
-			for ip, tps in reported_tps_dict.items():
-				self.metrics.machine_stats_dict[ip]["reported_tps"] = tps
-			self.metrics.lock.release()
+	# def get_metrics(self):
+	# 	URI = f'http://{self.auto_server_addr}/metrics'
+	# 	response = requests.get(URI)
+	# 	if response.status_code == 200:
+	# 		response = response.json()
+	# 		self.metrics.lock.acquire()
+	# 		self.metrics.total_cost = response["total_cost"]
+	# 		reported_tps_dict = response["reported_tps"]
+	# 		for ip, tps in reported_tps_dict.items():
+	# 			self.metrics.machine_stats_dict[ip]["reported_tps"] = tps
+	# 		self.metrics.lock.release()
 
 	def get_status(self):
 		URI = f'http://{self.auto_server_addr}/status'
