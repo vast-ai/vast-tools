@@ -58,6 +58,27 @@ def send_vllm_request(gpu_server_addr, text_prompt):
 
 	return {"reply" : text_result, "error": error, "num_tokens" : num_tokens}
 
+def send_vllm_request_auth(gpu_server_addr, id_token, text_prompt):
+	URI = f'http://{gpu_server_addr}/generate'
+	model_dict = {"prompt" : text_prompt}
+	request_dict = {"token" : id_token, "model" : model_dict}
+	text_result = None
+	error = None
+	num_tokens = None
+	try:
+		response = requests.post(URI, json=request_dict)
+		if response.status_code == 200:
+			reply = response.json()
+			if reply["error"] is None:
+				text_result = f"{text_prompt} -> {reply['response']}"
+				num_tokens = reply["num_tokens"]
+			else:
+				error = reply['error']
+	except requests.exceptions.ConnectionError as e:
+		error = f"connection error: {e}"
+
+	return {"reply" : text_result, "error": error, "num_tokens" : num_tokens}
+
 def format_prompt_request(gpu_server_addr, id_token, text_prompt, num_tokens):
 	# URI = f'http://{gpu_server_addr}/api/v1/generate'
 	URI = f'http://{gpu_server_addr}/auth'

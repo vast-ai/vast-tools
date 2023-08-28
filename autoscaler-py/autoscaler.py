@@ -452,7 +452,7 @@ class InstanceSet:
 		result = subprocess.run(["vastai", "stop", "instance", str(instance_id), "--raw"], capture_output=True)
 		return True
 
-	def create_instance(self, instance_id, model="dev"):
+	def create_instance(self, instance_id, model="vllm-13"):
 		config = self.instance_config[model]["create"]
 		mtoken = secrets.token_hex(32)
 		args = f" --onstart {config['onstart']} --image {config['image']} --disk {config['disk']} --env '-e MTOKEN={mtoken}'" # --ssh --direct

@@ -112,8 +112,7 @@ class LoadBalancer:
 
 	def get_next_addr(self, num_tokens):
 		addr = None
-		self.lock.acquire()
-		if len(self.ready_queue) != 0:
+		if not(self.ready_queue.empty()):
 			(work_time, _, ready_server) = self.ready_queue.get()
 			addr = self.get_address(ready_server)
 			token_queue = self.instance_clients[ready_server["id"]].token_queue
@@ -122,7 +121,6 @@ class LoadBalancer:
 			tps = DEFAULT_TPS
 			self.queue_duration[ready_server["id"]] += ((1 / tps) * num_tokens)
 			self.ready_queue.put((self.queue_duration[ready_server["id"]], ready_server["id"], ready_server))
-		self.lock.release()
 		# print(f"[loadbalancer] next addr is: {addr} on instance: {id}")
 		return addr, token
 

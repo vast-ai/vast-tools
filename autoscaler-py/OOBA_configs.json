@@ -21,6 +21,17 @@
             "disk" : "10.0"
         }
     },
+    "vllm-13": {
+        "get": {
+            "gpu_ram" : 26.0,
+            "disk_space" : 100.0
+        },
+        "create": {
+            "onstart" : "on_start_dev_vllm.sh",
+            "image" : "atinoda/text-generation-webui:default-nightly",
+            "disk" : "100.0"
+        }
+    },
     "dev-exllama": {
         "get": {
             "gpu_ram" : 16.0,
@@ -31,16 +42,6 @@
             "image" : "atinoda/text-generation-webui:default-nightly",
             "disk" : "16.0"
         }
-    },
-    "dev-vllm": {
-        "get": {
-            "gpu_ram" : 26.0,
-            "disk_space" : 100.0
-        },
-        "create": {
-            "onstart" : "on_start_dev_vllm.sh",
-            "image" : "atinoda/text-generation-webui:default-nightly",
-            "disk" : "100.0"
-        }
     }
+
 }

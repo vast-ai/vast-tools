@@ -5,7 +5,7 @@ from collections import defaultdict
 import subprocess
 import json
 
-from prompt_OOBA import format_prompt_request, send_vllm_request
+from prompt_OOBA import send_vllm_request, send_vllm_request_auth
 
 WAIT_INTERVAL = 20
 
@@ -180,7 +180,7 @@ class Client:
 		self.update_metrics(self.vllm_server_addr, success, gpu_response["num_tokens"], time_elapsed)
 
 
-	def send_prompt(self, text_prompt, num_tokens, request_num):
+	def send_prompt(self, text_prompt, num_tokens):
 		request_dict = {"num_tokens" : num_tokens}
 		URI = f'http://{self.lb_server_addr}/connect'
 		try:
@@ -193,12 +193,12 @@ class Client:
 			gpu_addr = response.json()["addr"]
 			id_token = response.json()["token"]
 			start_time = time.time()
-			gpu_response = format_prompt_request(gpu_addr, id_token, text_prompt, num_tokens)
+			gpu_response = send_vllm_request_auth(gpu_addr, id_token, text_prompt)
 			print(gpu_response["reply"])
 			end_time = time.time()
 			time_elapsed = end_time - start_time
 			success = (gpu_response["reply"] is not None)
-			self.update_metrics(gpu_addr, success, num_tokens, time_elapsed)
+			self.update_metrics(gpu_addr, success, gpu_response["num_tokens"], time_elapsed)
 		else:
 			self.metrics_report_busy()
 

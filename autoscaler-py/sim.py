@@ -57,7 +57,7 @@ class Sim:
             # max_tokens = user.max_response_length
             user.waiting = True
             user.lock.release()
-            self.client.send_prompt_vllm_server(prompt)
+            self.client.send_prompt(prompt)
             user.lock.acquire()
             user.num_chats += 1
             user.waiting = False
