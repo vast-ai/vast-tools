@@ -52,12 +52,11 @@ class Sim:
         user.lock.acquire()
         prob = user.rate * self.etime
         if (not(user.waiting) and random.random() <= prob):
-            # request_str = f"{user.id}-{user.num_chats}"
+            request_str = f"{user.id}-{user.num_chats}"
             prompt = user.prompt
-            # max_tokens = user.max_response_length
             user.waiting = True
             user.lock.release()
-            self.client.send_prompt(prompt)
+            self.client.send_prompt(prompt, id=request_str)
             user.lock.acquire()
             user.num_chats += 1
             user.waiting = False
@@ -89,8 +88,8 @@ class Sim:
         self.client.shutdown_lb()
 
     def run(self):
-        # self.client.setup_lb()
-        # self.client.wait_for_hot()
+        self.client.setup_lb()
+        self.client.wait_for_hot()
         self.init_users()
 
         for i in range(self.num_iters):
@@ -100,10 +99,8 @@ class Sim:
         self.deconstruct()
         self.client.metrics.print_metrics()
 
-
-
 def main():
-    sim = Sim(num_iters=500, base_num_users=500, base_rate=1.0 * (10 / 60), etime=2.0)
+    sim = Sim(num_iters=200, base_num_users=500, base_rate=1.0 * (10 / 60), etime=2.0)
     sim.run()
 
 if __name__ == "__main__":

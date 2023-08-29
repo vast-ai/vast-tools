@@ -3,7 +3,9 @@ from autoscaler import InstanceSet, get_address
 import logging
 
 app = Flask(__name__)
-app.logger.setLevel(logging.WARNING)
+
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
 
 autoscaler = None
 

@@ -81,7 +81,7 @@ class LoadBalancer:
 		busy_level = avg_duration / FULL_LOAD_THRESHOLD
 		num_busy = int(busy_level * num_ready)
 
-		print(f"[loadbalancer] ticking duration with {len(self.ready_queue)} ready and {avg_duration} avg duration")
+		print(f"[loadbalancer] ticking duration with {self.ready_queue.qsize()} ready and {avg_duration} avg duration")
 		self.client.report_hot_busy(num_hot=self.num_ready, num_busy=num_busy)
 		self.lock.release()
 
@@ -91,18 +91,18 @@ class LoadBalancer:
 			curr_time = time.time()
 			print(f"[loadbalancer] ticking with interval: {curr_time - prev_time}")
 			prev_time = curr_time
-			t1 = time.time()
+			# t1 = time.time()
 			self.update_ready_queue()
-			t2 = time.time()
-			print(f"[loadbalancer] updated ready queue in: {t2 - t1}")
-			t1 = time.time()
+			# t2 = time.time()
+			# print(f"[loadbalancer] updated ready queue in: {t2 - t1}")
+			# t1 = time.time()
 			self.tick_duration()
-			t2 = time.time()
-			print(f"[loadbalancer] ticked duration in: {t2 - t1}")
-			t1 = time.time()
+			# t2 = time.time()
+			# print(f"[loadbalancer] ticked duration in: {t2 - t1}")
+			# t1 = time.time()
 			self.monitor_instance_clients()
-			t2 = time.time()
-			print(f"[loadbalancer] monitored instance clients in: {t2 - t1}")
+			# t2 = time.time()
+			# print(f"[loadbalancer] monitored instance clients in: {t2 - t1}")
 			time.sleep(TIME_INTERVAL_SECONDS)
 
 	def get_address(self, instance):
@@ -117,7 +117,7 @@ class LoadBalancer:
 			addr = self.get_address(ready_server)
 			token_queue = self.instance_clients[ready_server["id"]].token_queue
 			token = token_queue.get()
-			print(f"[loadbalancer] got token for instance id: {ready_server['id']}, and token qsize: {token_queue.qsize()}")
+			# print(f"[loadbalancer] got token for instance id: {ready_server['id']}, and token qsize: {token_queue.qsize()}")
 			tps = DEFAULT_TPS
 			self.queue_duration[ready_server["id"]] += ((1 / tps) * num_tokens)
 			self.ready_queue.put((self.queue_duration[ready_server["id"]], ready_server["id"], ready_server))

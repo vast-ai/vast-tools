@@ -59,7 +59,7 @@ def send_vllm_request(gpu_server_addr, text_prompt):
 	return {"reply" : text_result, "error": error, "num_tokens" : num_tokens}
 
 def send_vllm_request_auth(gpu_server_addr, id_token, text_prompt):
-	URI = f'http://{gpu_server_addr}/generate'
+	URI = f'http://{gpu_server_addr}/auth'
 	model_dict = {"prompt" : text_prompt}
 	request_dict = {"token" : id_token, "model" : model_dict}
 	text_result = None

@@ -7,7 +7,7 @@ import json
 import secrets
 import os
 from ratio_manager import update_rolling_average
-from prompt_OOBA import format_prompt_request
+from prompt_OOBA import format_prompt_request, send_vllm_request_auth
 
 TIME_INTERVAL_SECONDS = 5
 MAX_COST_PER_HOUR = 10.0
@@ -133,7 +133,6 @@ class InstanceSet:
 		# 	with open(f"instance_info/{instance['machine_id']}.json", "w") as f:
 		# 		json.dump(instance, f)
 
-
 	def update_and_manage_background(self, event, manage=True):
 		while not event.is_set():
 			print("[autoscaler] ticking")
@@ -152,7 +151,6 @@ class InstanceSet:
 				return True
 		else:
 			return False
-
 
 	def update_instance_info(self, manage, init):
 		curr_instances = self.get_curr_instances()
@@ -192,7 +190,6 @@ class InstanceSet:
 		self.loading_instances = loading_instances
 		self.lock.release()
 
-		# self.bad_instance_ids += self.find_error_instances()
 		if manage:
 			self.update_ready_instances()
 
@@ -237,23 +234,22 @@ class InstanceSet:
 	def check_server_ready(self, instance): #could get notified by the server directly in the future
 		port_num = str(instance["ssh_port"])
 		host = instance["ssh_host"]
-		# key_file = "vast-2"
-		ssh_string = f"ssh -p {port_num} -o StrictHostKeyChecking=no root@{host}"
-		command_string = "grep 'Starting API at http://127.0.0.1:5001/api' /app/onstart.log | tail -n 1"
+		key_file = "/Users/nicholasgreenspan/Desktop/VastAI/ssh/vast-2" #need a better way to track this
+		ssh_string = f"ssh -i {key_file} -p {port_num} -o StrictHostKeyChecking=no root@{host}"
+		ready_str = "Serving Flask app 'model_inference_server'"
+		command_string = f"grep '{ready_str}' /src/infer.log | tail -n 1"
 		result = subprocess.run([ssh_string + " " + command_string], shell=True, capture_output=True)
 		out = result.stdout
-		if out is not None and "Starting API at http://127.0.0.1:5001/api" in out.decode('utf-8'):
+		if out is not None and ready_str in out.decode('utf-8'):
 			return True
 		else:
 			return False
 
 	def test_ready_instance(self, instance, token):
 		addr = get_address(instance)
-		response = format_prompt_request(addr, token, TEST_PROMPT, 10)
-		# print(response)
+		response = send_vllm_request_auth(addr, token, TEST_PROMPT)
 		if response["reply"] is not None:
-			reply = response["reply"].replace('\n', ' ')
-			if reply == "What? The 2018 midterm elections":
+			if response["num_tokens"] != 0:
 				return True
 		return False
 
@@ -332,6 +328,8 @@ class InstanceSet:
 		print("[autoscaler] managing instances: hot_busy_ratio: {}, hot_ratio: {}, hot_ratio_rolling: {}, num_hot: {}, num_busy: {}, num_cold_ready: {}, num_loading: {}, num_total: {}".format(hot_busy_ratio, hot_ratio, hot_ratio_rolling, num_hot, num_hot_busy, len(self.cold_instances), num_loading, num_tot))
 
 		#stop and start instances
+		self.lock.release()
+		return
 		if hot_busy_ratio < self.strat.target_hot_busy_ratio_lower:
 			print("[autoscaler] hot busy ratio too low!")
 			count = num_hot - int((hot_busy_ratio / self.strat.target_hot_busy_ratio_lower) * max(num_hot, 1))
@@ -369,8 +367,6 @@ class InstanceSet:
 			destroy_thread.join()
 
 		self.lock.release()
-		# self.manage_join()
-
 	############################### vastai API Helper Functions ##########################################################
 
 	def get_curr_instances(self):
@@ -407,7 +403,7 @@ class InstanceSet:
 			time.sleep(TIME_INTERVAL_SECONDS)
 		print("[autoscaler] done creating cold set")
 
-	def create_instances(self, num_instances, model="13"):
+	def create_instances(self, num_instances, model="vllm-13"):
 		ask_list = self.get_asks(model=model)
 		self.act_on_instances(self.create_instance, num_instances, ask_list)
 
@@ -455,7 +451,7 @@ class InstanceSet:
 	def create_instance(self, instance_id, model="vllm-13"):
 		config = self.instance_config[model]["create"]
 		mtoken = secrets.token_hex(32)
-		args = f" --onstart {config['onstart']} --image {config['image']} --disk {config['disk']} --env '-e MTOKEN={mtoken}'" # --ssh --direct
+		args = f" --onstart {config['onstart']} --image {config['image']} --disk {config['disk']} --env '-e MTOKEN={mtoken} {config['env']}'" # --ssh --direct
 		result = subprocess.run([f"vastai create instance {str(instance_id)}" + args + " --raw"], shell=True, capture_output=True)
 		if result is not None and result.stdout.decode('utf-8') is not None:
 			try:

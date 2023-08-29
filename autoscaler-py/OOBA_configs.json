@@ -24,12 +24,13 @@
     "vllm-13": {
         "get": {
             "gpu_ram" : 26.0,
-            "disk_space" : 100.0
+            "disk_space" : 50.0
         },
         "create": {
             "onstart" : "on_start_dev_vllm.sh",
             "image" : "atinoda/text-generation-webui:default-nightly",
-            "disk" : "100.0"
+            "disk" : "50.0",
+            "env" : "-e HF_TOKEN=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"
         }
     },
     "dev-exllama": {

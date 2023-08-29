@@ -3,7 +3,9 @@ from loadbalancer import LoadBalancer
 import logging
 
 app = Flask(__name__)
-app.logger.setLevel(logging.WARNING)
+
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
 
 lb = None
 
@@ -39,5 +41,5 @@ def get_connection():
     return {"addr" : addr, "token": token}
 
 if __name__ == '__main__':
-    app.run(threaded=False, port=5000) #think about how to support multi-threading safety
+    app.run(threaded=True, port=5000) #think about how to support multi-threading safety
 

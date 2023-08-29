@@ -7,7 +7,7 @@ import json
 
 from prompt_OOBA import send_vllm_request, send_vllm_request_auth
 
-WAIT_INTERVAL = 20
+WAIT_INTERVAL = 5
 
 class ClientMetrics:
 	def __init__(self):
@@ -103,7 +103,8 @@ class ClientMetrics:
 		print("number of requests finished: {}".format(self.num_requests_finished))
 		print("number of requests successful: {}".format(self.num_requests_successful))
 		print("number of times serverless server was busy: {}".format(self.num_serverless_server_busy))
-		print(f"reliability ratio: {self.num_requests_successful / self.num_requests_finished}")
+		rel_ratio = (self.num_requests_successful / self.num_requests_finished) if self.num_requests_finished != 0 else 0.0
+		print(f"reliability ratio: {rel_ratio}")
 
 		print("number of tokens requested: {}".format(self.total_tokens_requested))
 		print("total time elapsed: {}".format(self.get_time_elapsed()))
@@ -180,24 +181,28 @@ class Client:
 		self.update_metrics(self.vllm_server_addr, success, gpu_response["num_tokens"], time_elapsed)
 
 
-	def send_prompt(self, text_prompt, num_tokens):
+	def send_prompt(self, text_prompt, id, num_tokens=100):
 		request_dict = {"num_tokens" : num_tokens}
 		URI = f'http://{self.lb_server_addr}/connect'
+		# print(f"sending prompt: {id}")
 		try:
 			response = requests.get(URI, json=request_dict)
 		except requests.exceptions.ConnectionError:
 			self.metrics_report_busy()
 			return
 
+		# print(f"{id} recieved response from lb : {response}")
 		if response.status_code == 200 and response.json()["addr"] is not None:
 			gpu_addr = response.json()["addr"]
 			id_token = response.json()["token"]
 			start_time = time.time()
 			gpu_response = send_vllm_request_auth(gpu_addr, id_token, text_prompt)
-			print(gpu_response["reply"])
+			# print(gpu_response["reply"])
 			end_time = time.time()
 			time_elapsed = end_time - start_time
 			success = (gpu_response["reply"] is not None)
+			if not success:
+				print(gpu_response["error"])
 			self.update_metrics(gpu_addr, success, gpu_response["num_tokens"], time_elapsed)
 		else:
 			self.metrics_report_busy()
