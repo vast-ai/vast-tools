@@ -12,7 +12,7 @@ from prompt_OOBA import format_prompt_request, send_vllm_request_auth
 TIME_INTERVAL_SECONDS = 5
 MAX_COST_PER_HOUR = 10.0
 MAX_CONCURRENCY = 100
-INSTANCE_CONFIG_NAME = "OOBA_configs.json"
+INSTANCE_CONFIG_NAME = "configs/OOBA_configs.json"
 IGNORE_INSTANCE_IDS = []
 BAD_MACHINE_IDS = [4424]
 ERROR_STRINGS = ["safetensors_rust.SafetensorError", "RuntimeError", "Error: remote port forwarding failed"]
@@ -395,7 +395,7 @@ class InstanceSet:
 			return None
 
 	def create_cold_set(self, event, num_instances):
-		self.create_instances(num_instances, model="13")
+		self.create_instances(num_instances, model="vllm-13")
 		while not event.is_set():
 			for ready_instance in self.ready_instances:
 				self.stop_instance(ready_instance['id'])

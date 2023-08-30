@@ -1,0 +1,38 @@
+{
+    "vllm-13": {
+        "get": {
+            "gpu_ram" : 26.0,
+            "disk_space" : 50.0
+        },
+        "create": {
+            "onstart" : "on_start_13B.sh",
+            "image" : "atinoda/text-generation-webui:default-nightly",
+            "disk" : "50.0",
+            "env" : "-e HF_TOKEN=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"
+        }
+    },
+    "vllm-70": {
+        "get": {
+            "gpu_ram" : 140.0,
+            "disk_space" : 100.0
+        },
+        "create": {
+            "onstart" : "on_start_70B.sh",
+            "image" : "atinoda/text-generation-webui:default-nightly",
+            "disk" : "100.0",
+            "env" : "-e HF_TOKEN=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"
+        }
+    },
+    "dev": {
+        "get": {
+            "gpu_ram" : 16.0,
+            "disk_space" : 16.0
+        },
+        "create": {
+            "onstart" : "on_start_dev.sh",
+            "image" : "atinoda/text-generation-webui:default-nightly",
+            "disk" : "16.0"
+        }
+    }
+
+}

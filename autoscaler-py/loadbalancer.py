@@ -31,10 +31,7 @@ class LoadBalancer:
 		self.bt.start()
 
 	def update_ready_queue(self):
-		t1 = time.time()
 		ready_instances = self.client.get_ready_instances()
-		t2 = time.time()
-		print(f"[loadbalancer] got ready instances in: {t2 - t1}")
 		self.lock.acquire()
 		queue_duration = self.queue_duration
 		self.lock.release()

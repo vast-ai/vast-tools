@@ -4,6 +4,7 @@ import requests
 from collections import defaultdict
 import subprocess
 import json
+import os
 
 from prompt_OOBA import send_vllm_request, send_vllm_request_auth
 
@@ -12,10 +13,13 @@ WAIT_INTERVAL = 5
 class ClientMetrics:
 	def __init__(self):
 
+		self.num_serverless_server_started = 0
+		self.num_serverless_server_finished = 0
+
+		self.num_requests_started = 0
 		self.num_requests_finished = 0
 		self.num_requests_successful = 0
-		self.total_tokens_requested = 0
-		self.num_serverless_server_busy = 0
+		self.total_tokens_generated = 0
 
 		self.balance = 0.0
 		self.total_cost = 0.0
@@ -26,7 +30,7 @@ class ClientMetrics:
 		self.min_request_latency = float('inf')
 		self.max_request_latency = 0.0
 
-		default_value = {"num_requests_finished": 0, "num_requests_successful" : 0, "total_tokens_requested" : 0, "total_request_time": 0.0, "reported_tps": 0.0}
+		default_value = {"num_requests_finished": 0, "num_requests_successful" : 0, "total_tokens_generated" : 0, "total_request_time": 0.0, "reported_tps": 0.0}
 		self.machine_stats_dict = defaultdict(lambda: default_value.copy())
 
 		self.lock = Lock()
@@ -42,7 +46,7 @@ class ClientMetrics:
 		return ret
 
 	def get_tokens_throughput(self):
-		ret = self.total_tokens_requested / self.get_time_elapsed()
+		ret = self.total_tokens_generated / self.get_time_elapsed()
 		return ret
 
 	def get_average_latency(self):
@@ -81,8 +85,8 @@ class ClientMetrics:
 		return ret
 
 	def get_cost_per_token(self): #cost per kilo-token
-		if self.total_tokens_requested != 0:
-			ret = self.get_total_cost() / (self.total_tokens_requested / 1000)
+		if self.total_tokens_generated != 0:
+			ret = self.get_total_cost() / (self.total_tokens_generated / 1000)
 		else:
 			ret = 0.0
 		return ret
@@ -92,7 +96,7 @@ class ClientMetrics:
 		metric_dict = self.machine_stats_dict[instance_ip]
 		for metric, value in metric_dict.items():
 			print(f"{metric}: {value}")
-		real_tps = 0 if metric_dict["total_request_time"] == 0 else metric_dict["total_tokens_requested"] / metric_dict["total_request_time"]
+		real_tps = 0 if metric_dict["total_request_time"] == 0 else metric_dict["total_tokens_generated"] / metric_dict["total_request_time"]
 		print("real_tps: {}".format(real_tps))
 
 	def print_metrics(self):
@@ -100,13 +104,15 @@ class ClientMetrics:
 		self.calculate_costs()
 		print("overall metrics:")
 		print("-----------------------------------------------------")
-		print("number of requests finished: {}".format(self.num_requests_finished))
-		print("number of requests successful: {}".format(self.num_requests_successful))
-		print("number of times serverless server was busy: {}".format(self.num_serverless_server_busy))
-		rel_ratio = (self.num_requests_successful / self.num_requests_finished) if self.num_requests_finished != 0 else 0.0
+		print("number of serverless server requests started: {}".format(self.num_serverless_server_started))
+		print("number of serverless server requests finished: {}".format(self.num_serverless_server_finished))
+		print("number of gpu server requests started: {}".format(self.num_requests_started))
+		print("number of gpu server requests finished: {}".format(self.num_requests_finished))
+		print("number of gpu server requests successful: {}".format(self.num_requests_successful))
+		rel_ratio = (self.num_requests_successful / self.num_requests_started) if self.num_requests_started != 0 else 0.0
 		print(f"reliability ratio: {rel_ratio}")
 
-		print("number of tokens requested: {}".format(self.total_tokens_requested))
+		print("number of tokens generated: {}".format(self.total_tokens_generated))
 		print("total time elapsed: {}".format(self.get_time_elapsed()))
 
 		print("number of requests per second: {}".format(self.get_request_throughput()))
@@ -131,7 +137,10 @@ class Client:
 		self.metrics = ClientMetrics()
 		self.lb_server_addr = '127.0.0.1:5000'
 		self.auto_server_addr = '127.0.0.1:8000'
-		self.vllm_server_addr = '89.37.121.214:48271'
+		# self.vllm_server_addr = '89.37.121.214:48271'
+		self.error_fd = os.open("error.txt", os.O_WRONLY | os.O_CREAT)
+		os.write(self.error_fd, f"ERRORS: \n".encode("utf-8"))
+		self.error_lock = Lock()
 
 	def setup_lb(self):
 		URI = f'http://{self.lb_server_addr}/setup'
@@ -163,13 +172,8 @@ class Client:
 			machine_entry['total_request_time'] += time_elapsed
 			self.metrics.min_request_latency = min(self.metrics.min_request_latency, time_elapsed)
 			self.metrics.max_request_latency = max(self.metrics.max_request_latency, time_elapsed)
-			self.metrics.total_tokens_requested += num_tokens
-			machine_entry["total_tokens_requested"] += num_tokens
-		self.metrics.lock.release()
-
-	def metrics_report_busy(self):
-		self.metrics.lock.acquire()
-		self.metrics.num_serverless_server_busy += 1
+			self.metrics.total_tokens_generated += num_tokens
+			machine_entry["total_tokens_generated"] += num_tokens
 		self.metrics.lock.release()
 
 	def send_prompt_vllm_server(self, text_prompt):
@@ -180,44 +184,33 @@ class Client:
 		success = (gpu_response["reply"] is not None)
 		self.update_metrics(self.vllm_server_addr, success, gpu_response["num_tokens"], time_elapsed)
 
-
 	def send_prompt(self, text_prompt, id, num_tokens=100):
 		request_dict = {"num_tokens" : num_tokens}
 		URI = f'http://{self.lb_server_addr}/connect'
-		# print(f"sending prompt: {id}")
-		try:
-			response = requests.get(URI, json=request_dict)
-		except requests.exceptions.ConnectionError:
-			self.metrics_report_busy()
-			return
+		self.metrics.lock.acquire()
+		self.metrics.num_serverless_server_started += 1
+		self.metrics.lock.release()
+		response = requests.get(URI, json=request_dict)
+		self.metrics.lock.acquire()
+		self.metrics.num_serverless_server_finished += 1
+		self.metrics.lock.release()
 
-		# print(f"{id} recieved response from lb : {response}")
 		if response.status_code == 200 and response.json()["addr"] is not None:
+			self.metrics.lock.acquire()
+			self.metrics.num_requests_started += 1
+			self.metrics.lock.release()
 			gpu_addr = response.json()["addr"]
 			id_token = response.json()["token"]
 			start_time = time.time()
 			gpu_response = send_vllm_request_auth(gpu_addr, id_token, text_prompt)
-			# print(gpu_response["reply"])
 			end_time = time.time()
 			time_elapsed = end_time - start_time
 			success = (gpu_response["reply"] is not None)
-			if not success:
-				print(gpu_response["error"])
 			self.update_metrics(gpu_addr, success, gpu_response["num_tokens"], time_elapsed)
-		else:
-			self.metrics_report_busy()
-
-	# def get_metrics(self):
-	# 	URI = f'http://{self.auto_server_addr}/metrics'
-	# 	response = requests.get(URI)
-	# 	if response.status_code == 200:
-	# 		response = response.json()
-	# 		self.metrics.lock.acquire()
-	# 		self.metrics.total_cost = response["total_cost"]
-	# 		reported_tps_dict = response["reported_tps"]
-	# 		for ip, tps in reported_tps_dict.items():
-	# 			self.metrics.machine_stats_dict[ip]["reported_tps"] = tps
-	# 		self.metrics.lock.release()
+			if not success:
+				self.error_lock.acquire()
+				os.write(self.error_fd, f"{gpu_response['error']}\n".encode("utf-8"))
+				self.error_lock.release()
 
 	def get_status(self):
 		URI = f'http://{self.auto_server_addr}/status'
@@ -226,14 +219,19 @@ class Client:
 			response = response.json()
 			return response
 
+
 	def wait_for_hot(self):
 		num_hot = 0
 		while num_hot == 0:
 			print("[client] server not yet ready")
 			time.sleep(WAIT_INTERVAL)
-			num_hot = self.get_status()["num_hot"]
+			status = self.get_status()
+			if status is not None:
+				num_hot = status["num_hot"]
 		print("[client] server now ready")
 
+	def deconstruct(self):
+		os.close(self.error_fd)
 
 def main():
 	pass

@@ -41,5 +41,5 @@ def get_connection():
     return {"addr" : addr, "token": token}
 
 if __name__ == '__main__':
-    app.run(threaded=True, port=5000) #think about how to support multi-threading safety
+    app.run(threaded=False, port=5000) #double check multi-threading safety
 
