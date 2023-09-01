@@ -6,8 +6,8 @@ then
     pip install protobuf;
     pip install vllm;
     git clone https://github.com/nickgreenspan/host-server;
-    /scripts/docker-entrypoint.sh python3 /app/download-model.py meta-llama/Llama-2-70b-chat-hf;
     touch ~/.no_auto_tmux
+    /scripts/docker-entrypoint.sh python3 /app/download-model.py meta-llama/Llama-2-70b-chat-hf;
 fi
 touch /root/hasbooted
 python3 /src/host-server/auth_server.py > auth.log 2>&1 &

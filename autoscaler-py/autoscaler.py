@@ -7,7 +7,7 @@ import json
 import secrets
 import os
 from ratio_manager import update_rolling_average
-from prompt_OOBA import format_prompt_request, send_vllm_request_auth
+from prompt_OOBA import send_vllm_request_auth, send_vllm_request_streaming_test
 
 TIME_INTERVAL_SECONDS = 5
 MAX_COST_PER_HOUR = 10.0
@@ -19,6 +19,19 @@ ERROR_STRINGS = ["safetensors_rust.SafetensorError", "RuntimeError", "Error: rem
 TEST_PROMPT = "What?"
 
 ####################################### INSTANCE ACCESS HELPERS #######################################
+def get_curr_instances():
+	result = subprocess.run(["vastai", "show", "instances", "--raw"], capture_output=True)
+	instance_info = result.stdout.decode('utf-8')
+	if instance_info:
+		try:
+			curr_instances = json.loads(instance_info)
+		except json.decoder.JSONDecodeError:
+			curr_instances = None
+	else:
+		curr_instances = None
+
+	return curr_instances
+
 #could be called on the output from 'show instance' or 'search offers'
 def tps(instance):
 	# print(instance['machine_id'])
@@ -88,6 +101,8 @@ class InstanceSet:
 		self.bad_instance_ids = []
 		self.ignore_instance_ids = IGNORE_INSTANCE_IDS
 
+		self.streaming = True
+
 		self.cost_dict = {}
 		self.metrics = InstanceSetMetrics()
 		self.lock = Lock()
@@ -153,7 +168,7 @@ class InstanceSet:
 			return False
 
 	def update_instance_info(self, manage, init):
-		curr_instances = self.get_curr_instances()
+		curr_instances = get_curr_instances()
 		if curr_instances is None:
 			return
 
@@ -245,8 +260,12 @@ class InstanceSet:
 		else:
 			return False
 
+	#need to change for the streaming case
 	def test_ready_instance(self, instance, token):
 		addr = get_address(instance)
+		if self.streaming:
+			return send_vllm_request_streaming_test(addr)
+
 		response = send_vllm_request_auth(addr, token, TEST_PROMPT)
 		if response["reply"] is not None:
 			if response["num_tokens"] != 0:
@@ -300,9 +319,9 @@ class InstanceSet:
 	def manage_instances(self):
 		self.lock.acquire()
 
-		print("[autoscaler] dealing with bad instances")
-		self.act_on_instances(self.destroy_instance, len(self.bad_instance_ids), self.bad_instance_ids)
-		self.bad_instance_ids = []
+		# print("[autoscaler] dealing with bad instances")
+		# self.act_on_instances(self.destroy_instance, len(self.bad_instance_ids), self.bad_instance_ids)
+		# self.bad_instance_ids = []
 
 		if self.num_busy > self.strat.avg_num_busy:
 			num_hot_busy = self.num_busy
@@ -369,30 +388,31 @@ class InstanceSet:
 		self.lock.release()
 	############################### vastai API Helper Functions ##########################################################
 
-	def get_curr_instances(self):
-		result = subprocess.run(["vastai", "show", "instances", "--raw"], capture_output=True)
-		instance_info = result.stdout.decode('utf-8')
-		if instance_info:
-			try:
-				curr_instances = json.loads(instance_info)
-			except json.decoder.JSONDecodeError:
-				curr_instances = None
-		else:
-			curr_instances = None
-
-		return curr_instances
-
-	def get_asks(self, model="13", budget=True):
+	def get_asks(self, model, budget=True):
+		ask_list = []
 		config = self.instance_config[model]["get"]
-		order = "dph" if budget else "dlperf_per_dphtotal" #could also sort by network speed?
-		args = f"'gpu_ram >= {config['gpu_ram']} disk_space >= {config['disk_space']}' -o '{order}'"
-		result = subprocess.run(["vastai search offers " + args + " --raw"], shell=True, capture_output=True)
-		listed_instances = result.stdout.decode('utf-8')
-		if listed_instances:
-			ask_list = json.loads(listed_instances)
-			return ask_list
-		else:
-			return None
+		gpu_configs = config["gpu"]
+		disk_args =  f"disk_space >= {config['disk_space']}"
+		order = "dph" if budget else "dlperf_per_dphtotal"
+		for gpu_config in gpu_configs:
+			gpu_args = ""
+			if "gpu_name" in gpu_config.keys():
+				gpu_args += f"gpu_name = {gpu_config['gpu_name']} "
+			if "num_gpus" in gpu_config.keys():
+				gpu_args += f"num_gpus = {gpu_config['num_gpus']} "
+			if "gpu_ram" in gpu_config.keys():
+				gpu_args += f"gpu_ram >= {gpu_config['gpu_ram']} "
+
+			full_args = f"'{gpu_args}{disk_args}' -o '{order}'"
+			print(full_args)
+			result = subprocess.run(["vastai search offers " + full_args + " --raw"], shell=True, capture_output=True)
+			listed_instances = result.stdout.decode('utf-8')
+			if listed_instances and listed_instances[0] == '[':
+				# print(listed_instances)
+				ask_list += json.loads(listed_instances)
+				print(len(ask_list))
+
+		return ask_list
 
 	def create_cold_set(self, event, num_instances):
 		self.create_instances(num_instances, model="vllm-13")
@@ -403,8 +423,10 @@ class InstanceSet:
 			time.sleep(TIME_INTERVAL_SECONDS)
 		print("[autoscaler] done creating cold set")
 
-	def create_instances(self, num_instances, model="vllm-13"):
+	def create_instances(self, num_instances, model="vllm-70"):
 		ask_list = self.get_asks(model=model)
+		for instance in ask_list:
+			instance["model"] = model
 		self.act_on_instances(self.create_instance, num_instances, ask_list)
 
 	def start_instances(self, num_instances):
@@ -415,25 +437,21 @@ class InstanceSet:
 		if instance_list is None or len(instance_list) == 0:
 			return
 
-		if type(instance_list[0]) is dict:
-			id_list = list(map(get_instance_id, instance_list))
-		else:
-			id_list = instance_list
-
 		num_acted = 0
-		batch_idx = num_instances
-		while num_acted < num_instances and len(id_list) > 0:
-			batch_idx = min(batch_idx, len(id_list))
-			curr_ids = id_list[:batch_idx]
-			id_list = id_list[batch_idx:]
+		while num_acted < num_instances and len(instance_list) > 0:
+			batch_idx = num_instances - num_acted
+			batch_idx = min(batch_idx, len(instance_list))
+			curr_instances = instance_list[:batch_idx]
+			instance_list = instance_list[batch_idx:]
 			with ThreadPoolExecutor(MAX_CONCURRENCY) as e:
-				for result in e.map(action, curr_ids):
+				for result in e.map(action, curr_instances):
 					if result:
 						num_acted += 1
 
 		print(f"[autoscaler] sucessfully called {action.__name__} on {num_acted} instances")
 
-	def start_instance(self, instance_id):
+	def start_instance(self, instance):
+		instance_id = instance["id"]
 		if instance_id in self.ignore_instance_ids:
 			return
 		result = subprocess.run(["vastai", "start", "instance", str(instance_id), "--raw"], capture_output=True)
@@ -442,17 +460,23 @@ class InstanceSet:
 		else:
 			return False
 
-	def stop_instance(self, instance_id):
+	def stop_instance(self, instance):
+		instance_id = instance["id"]
 		if instance_id in self.ignore_instance_ids:
 			return
 		result = subprocess.run(["vastai", "stop", "instance", str(instance_id), "--raw"], capture_output=True)
 		return True
 
-	def create_instance(self, instance_id, model="vllm-13"):
+	def create_instance(self, instance, model="vllm-70"):
+		instance_id = instance["id"]
+		if "model" in instance.keys():
+			model = instance["model"]
+		num_gpus = instance["num_gpus"]
 		config = self.instance_config[model]["create"]
 		mtoken = secrets.token_hex(32)
-		args = f" --onstart {config['onstart']} --image {config['image']} --disk {config['disk']} --env '-e MTOKEN={mtoken} {config['env']}'" # --ssh --direct
+		args = f" --onstart {config['onstart']} --image {config['image']} --disk {config['disk']} --env '-e MASTER_TOKEN={mtoken} -e NUM_GPUS={num_gpus} {config['env']}'" # --ssh --direct
 		result = subprocess.run([f"vastai create instance {str(instance_id)}" + args + " --raw"], shell=True, capture_output=True)
+		print(result)
 		if result is not None and result.stdout.decode('utf-8') is not None:
 			try:
 				response = json.loads(result.stdout.decode('utf-8'))
@@ -467,7 +491,8 @@ class InstanceSet:
 			except json.decoder.JSONDecodeError:
 				pass
 
-	def destroy_instance(self, instance_id: float):
+	def destroy_instance(self, instance):
+		instance_id = instance["id"]
 		if instance_id in self.ignore_instance_ids:
 			return
 		result = subprocess.run(["vastai", "destroy", "instance", str(instance_id), "--raw"], capture_output=True)
@@ -487,6 +512,6 @@ class InstanceSet:
 
 	def print_instances(self, curr_instances=None):
 		if curr_instances is None:
-			curr_instances = self.get_curr_instances()
+			curr_instances = get_curr_instances()
 		for instance in curr_instances:
 			print("id: {}, actual_status: {}, intended_status: {}, current_state: {}".format(instance["id"], instance["actual_status"], instance["intended_status"], instance["cur_state"]))

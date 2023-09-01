@@ -1,5 +1,7 @@
 import requests
 import json
+import time
+from websockets.sync.client import connect
 
 ooba_dict = {
 	'auto_max_new_tokens': False,
@@ -68,39 +70,49 @@ def send_vllm_request_auth(gpu_server_addr, id_token, text_prompt):
 	try:
 		response = requests.post(URI, json=request_dict)
 		if response.status_code == 200:
-			reply = response.json()
-			if reply["error"] is None:
-				text_result = f"{text_prompt} -> {reply['response']}"
-				num_tokens = reply["num_tokens"]
-			else:
-				error = reply['error']
+			try:
+				reply = response.json()
+				if reply["error"] is None:
+					text_result = f"{text_prompt} -> {reply['response']}"
+					num_tokens = reply["num_tokens"]
+				else:
+					error = reply['error']
+			except json.JSONDecodeError:
+				error = "json"
+		else:
+			error = f"status code: {response.status_code}"
 	except requests.exceptions.ConnectionError as e:
 		error = f"connection error: {e}"
 
-	return {"reply" : text_result, "error": error, "num_tokens" : num_tokens}
+	return {"reply" : text_result, "error": error, "num_tokens" : num_tokens, "first_msg_wait" : None}
 
-def format_prompt_request(gpu_server_addr, id_token, text_prompt, num_tokens):
-	# URI = f'http://{gpu_server_addr}/api/v1/generate'
-	URI = f'http://{gpu_server_addr}/auth'
-	ooba_dict['prompt'] = text_prompt
-	ooba_dict['max_new_tokens'] = num_tokens
-	request_dict = {"token" : id_token, "ooba" : ooba_dict}
-	text_result = None
-	error = None
-	try:
-		response = requests.post(URI, json=request_dict)
-		if response.status_code == 200:
-			try:
-				result = response.json()['results'][0]['text']
-				text_result = text_prompt + result
-			except json.decoder.JSONDecodeError:
-				error = "json"
-		else:
-			error = f"code:{response.status_code}"
-	except requests.exceptions.ConnectionError as e:
-		error = f"connection error:{e}"
+def send_vllm_request_streaming(gpu_server_addr, id_token, text_prompt):
+	response = ""
+	first_msg_wait = 0.0
+	first = True
+	with connect(f"ws://{gpu_server_addr}/") as websocket:
+		t1 = time.time()
+		websocket.send(text_prompt + "?")
+		for message in websocket:
+			if first:
+				t2 = time.time()
+				first_msg_wait = t2 - t1
+				first = False
+			response += message
+	return {"reply" : response, "error" : None, "num_tokens" : 50, "first_msg_wait" : first_msg_wait}
 
-	return {"reply" : text_result, "error": error}
+def send_vllm_request_streaming_test(gpu_server_addr):
+	response = ""
+	with connect(f"ws://{gpu_server_addr}/") as websocket:
+		websocket.send("Hello?")
+		for message in websocket:
+			response += message
+	print(response)
+	if response != "":
+		return True
+	else:
+		return False
+
 
 def main():
 	addr = "89.37.121.214:48271"

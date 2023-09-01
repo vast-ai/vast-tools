@@ -2,7 +2,7 @@ import random
 import time
 from threading import Thread, Lock, Event
 from queue import Queue
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
 import resource
 import os
 import psutil
@@ -74,55 +74,46 @@ class Sim:
 		user.lock.release()
 
 	def update_loop(self, i):
-		print(f"[sim] updating i={i} and num fds is: {self.proc.num_fds()}")
-		try:
-			with ThreadPoolExecutor(MAX_CONCURRENCY) as e:
-				e.map(self.send_chat, self.users)
-		except ThreadTermination:
-			print(f"terminating loop: {i}")
+		print(f"[sim] updating i = {i} and num fds is: {self.proc.num_fds()}")
+		with ThreadPoolExecutor(MAX_CONCURRENCY) as e:
+			futures = []
+			for user in self.users:
+				future = e.submit(self.send_chat, user)
+				futures.append(future)
+
+			while len(futures) > 0:
+				# if self.exit_event.is_set():
+				# 	for future in futures:
+				# 		cancel_result = future.cancel()
+				# 		print(cancel_result)
+				# 	break
+				done, pending = wait(futures, timeout=10, return_when=ALL_COMPLETED)
+				print(f"loop {i} has {len(pending)} pending and {len(done)} more done")
+				# print(pending)
+				futures = list(pending)
+
+
 
 	def update(self, i):
 		t = Thread(target=self.update_loop, args=(i,))
-		self.thread_queue.put(t)
+		self.thread_queue.put((i, t))
 		t.start()
 
 	def join_rest(self):
-		print("[autoscaler] joining rest")
-		num_alive = 0
 		while self.thread_queue.qsize() > 0:
-			t = self.thread_queue.get()
-			t.join(timeout=1)
-			if t.is_alive():
-				print(f"{t.getName()} is still alive")
-				num_alive += 1
-
-		started_chats = 0
-		ended_chats = 0
-		num_waiting = 0
-		for user in self.users:
-			started_chats += user.started_chats
-			ended_chats += user.ended_chats
-			if user.waiting:
-				num_waiting += 1
-
-		print(f"num waiting: {num_waiting}")
-		print(f"total started chats: {started_chats}")
-		print(f"total finished chats: {ended_chats}")
-		print(f"num fds: {self.proc.num_fds()}")
-
-		if num_alive > 0:
-			print(f"{num_alive} threads are still alive")
-			raise ThreadTermination
+			i, t = self.thread_queue.get()
+			print(f"joining: {i}")
+			t.join()
 
 	def join_background(self, event):
 		while not event.is_set():
 			while self.thread_queue.qsize() > 0:
 				if event.is_set():
 					break
-				t = self.thread_queue.get()
+				(i, t) = self.thread_queue.get()
 				t.join(timeout=JOIN_TIMEOUT)
 				if (t.is_alive()):
-					self.thread_queue.put(t)
+					self.thread_queue.put((i, t))
 
 			time.sleep(10)
 
@@ -133,23 +124,23 @@ class Sim:
 		self.client.wait_for_hot()
 		self.init_users()
 
+		self.client.metrics.session_start_time = time.time()
 		for i in range(self.num_iters):
 			self.update(i)
 			time.sleep(self.etime)
 
 		self.exit_event.set()
 		self.bg.join()
-		try:
-			self.join_rest()
-		except ThreadTermination:
-			pass
+		self.join_rest()
 
+		print("session done")
+		self.client.metrics.session_end_time = time.time()
 		self.client.metrics.print_metrics()
 		self.client.deconstruct()
 		self.client.shutdown_lb()
 
 def main():
-	sim = Sim(num_iters=5, base_num_users=500, base_rate=1.0 * (15 / 60), etime=2.0)
+	sim = Sim(num_iters=100, base_num_users=100, base_rate=1.0 * (15 / 60), etime=2.0)
 	sim.run()
 
 if __name__ == "__main__":

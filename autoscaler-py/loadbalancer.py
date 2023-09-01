@@ -12,6 +12,16 @@ FULL_LOAD_THRESHOLD = 2.5
 DEFAULT_TPS = 35.0
 MAX_CONCURRENCY = 100
 
+def get_address_auth(instance):
+	addr = instance["public_ipaddr"] + ":" + instance["ports"]["5005/tcp"][0]["HostPort"]
+	addr = addr.replace('\n', '')
+	return addr
+
+def get_address(instance):
+	addr = instance["public_ipaddr"] + ":" + instance["ports"]["5000/tcp"][0]["HostPort"]
+	addr = addr.replace('\n', '')
+	return addr
+
 class LoadBalancer:
 	def __init__(self, cold_set_size=0, manage=True):
 		self.client = Client()
@@ -44,7 +54,7 @@ class LoadBalancer:
 			if id in self.old_ready_ids:
 				num_ready += 1
 			else:
-				self.instance_clients[id] = InstanceClient(ready_instance["id"], self.get_address(ready_instance), ready_instance["mtoken"])
+				self.instance_clients[id] = InstanceClient(ready_instance["id"], get_address_auth(ready_instance), ready_instance["mtoken"])
 
 			ready_queue.put((queue_duration[id], id, ready_instance))
 			ready_ids.append(id)
@@ -102,16 +112,11 @@ class LoadBalancer:
 			# print(f"[loadbalancer] monitored instance clients in: {t2 - t1}")
 			time.sleep(TIME_INTERVAL_SECONDS)
 
-	def get_address(self, instance):
-		addr = instance["public_ipaddr"] + ":" + instance["ports"]["5000/tcp"][0]["HostPort"]
-		addr = addr.replace('\n', '')
-		return addr
-
 	def get_next_addr(self, num_tokens):
 		addr = None
 		if not(self.ready_queue.empty()):
 			(work_time, _, ready_server) = self.ready_queue.get()
-			addr = self.get_address(ready_server)
+			addr = get_address(ready_server)
 			token_queue = self.instance_clients[ready_server["id"]].token_queue
 			token = token_queue.get()
 			# print(f"[loadbalancer] got token for instance id: {ready_server['id']}, and token qsize: {token_queue.qsize()}")

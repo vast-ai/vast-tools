@@ -6,7 +6,9 @@ import subprocess
 import json
 import os
 
-from prompt_OOBA import send_vllm_request, send_vllm_request_auth
+from autoscaler import get_curr_instances
+from loadbalancer import get_address
+from prompt_OOBA import send_vllm_request, send_vllm_request_auth, send_vllm_request_streaming
 
 WAIT_INTERVAL = 5
 
@@ -25,12 +27,16 @@ class ClientMetrics:
 		self.total_cost = 0.0
 
 		self.total_request_time = 0.0 #elapsed time across all successful requests
-		self.session_start_time = time.time() #maybe make this the time of the first send request
+		self.session_start_time = 0.0
 
 		self.min_request_latency = float('inf')
 		self.max_request_latency = 0.0
 
-		default_value = {"num_requests_finished": 0, "num_requests_successful" : 0, "total_tokens_generated" : 0, "total_request_time": 0.0, "reported_tps": 0.0}
+		self.total_first_msg_wait = 0.0
+		self.min_first_msg_wait = float('inf')
+		self.max_first_msg_wait = 0.0
+
+		default_value = {"num_requests_started": 0, "num_requests_finished": 0, "num_requests_successful" : 0, "total_tokens_generated" : 0, "total_request_time": 0.0, "reported_tps": 0.0}
 		self.machine_stats_dict = defaultdict(lambda: default_value.copy())
 
 		self.lock = Lock()
@@ -38,7 +44,7 @@ class ClientMetrics:
 
 	#call below with lock LOCKED
 	def get_time_elapsed(self):
-		ret = time.time() - self.session_start_time
+		ret = self.session_end_time - self.session_start_time
 		return ret
 
 	def get_request_throughput(self):
@@ -56,12 +62,18 @@ class ClientMetrics:
 			ret = 0.0
 		return ret
 
+	def get_average_first_msg_wait(self):
+		if self.num_requests_successful != 0:
+			ret = self.total_first_msg_wait / self.num_requests_successful
+		else:
+			ret = 0.0
+		return ret
+
 	def zero_costs(self):
 		result = subprocess.run([f"vastai show invoices --raw"], shell=True, capture_output=True)
 		transactions = json.loads(result.stdout.decode('utf-8'))
 		balance = 0.0
 		for t in transactions:
-			# print(t)
 			if "is_credit" in t.keys():
 				balance += float(t["amount"])
 			else:
@@ -69,16 +81,22 @@ class ClientMetrics:
 		self.balance = balance
 
 	def calculate_costs(self):
-		result = subprocess.run([f"vastai show invoices --raw"], shell=True, capture_output=True)
-		transactions = json.loads(result.stdout.decode('utf-8'))
-		new_balance = 0.0
-		for t in transactions:
-			if "is_credit" in t.keys():
-				new_balance += float(t["amount"])
-			else:
-				new_balance -= float(t["amount"])
-		cost = self.balance - new_balance
-		self.total_cost = cost
+		instances = None
+		for _ in range(5):
+			instances = get_curr_instances()
+			if instances is not None:
+				break
+		if instances is None:
+			print("error!")
+			return
+		dph = 0.0
+		for instance in instances:
+			if "ports" not in instance.keys():
+				continue
+			if get_address(instance) in self.machine_stats_dict.keys():
+				dph += instance["dph_base"]
+		print(dph)
+		self.total_cost = (self.get_time_elapsed() / (60 * 60)) * dph
 
 	def get_total_cost(self):
 		ret = self.total_cost
@@ -100,7 +118,10 @@ class ClientMetrics:
 		print("real_tps: {}".format(real_tps))
 
 	def print_metrics(self):
-		self.lock.acquire()
+		print(f"printing metrics and lock is locked: {self.lock.locked()}")
+		# print("waiting_for_lock")
+		# self.lock.acquire()
+		# print("got_lock")
 		self.calculate_costs()
 		print("overall metrics:")
 		print("-----------------------------------------------------")
@@ -122,6 +143,11 @@ class ClientMetrics:
 		print("min request latency: {}".format(self.min_request_latency))
 		print("max request latency: {}".format(self.max_request_latency))
 
+		if self.total_first_msg_wait != 0.0:
+			print("avg first msg wait: {}".format(self.get_average_first_msg_wait()))
+			print("min first msg wait: {}".format(self.min_first_msg_wait))
+			print("max first msg wait: {}".format(self.max_first_msg_wait))
+
 		print("total cost in dollars: {}".format(self.get_total_cost()))
 		print("total cost per 1000 tokens: {}".format(self.get_cost_per_token()))
 		print("-----------------------------------------------------")
@@ -130,7 +156,7 @@ class ClientMetrics:
 			print("-----------------------------------------------------")
 			self.print_instance_metrics(ip)
 
-		self.lock.release()
+		# self.lock.release()
 
 class Client:
 	def __init__(self):
@@ -138,7 +164,7 @@ class Client:
 		self.lb_server_addr = '127.0.0.1:5000'
 		self.auto_server_addr = '127.0.0.1:8000'
 		# self.vllm_server_addr = '89.37.121.214:48271'
-		self.error_fd = os.open("error.txt", os.O_WRONLY | os.O_CREAT)
+		self.error_fd = os.open("logs/error.txt", os.O_WRONLY | os.O_CREAT)
 		os.write(self.error_fd, f"ERRORS: \n".encode("utf-8"))
 		self.error_lock = Lock()
 
@@ -160,8 +186,14 @@ class Client:
 			print("[client] load balancer server shutdown failed")
 
 
-	def update_metrics(self, gpu_addr, success, num_tokens, time_elapsed):
-		self.metrics.lock.acquire()
+	def update_metrics_started(self, gpu_addr):
+		# self.metrics.lock.acquire()
+		self.metrics.num_requests_started += 1
+		self.metrics.machine_stats_dict[gpu_addr]['num_requests_started'] += 1
+		# self.metrics.lock.release()
+
+	def update_metrics(self, gpu_addr, success, num_tokens, time_elapsed, first_msg_wait=None):
+		# self.metrics.lock.acquire()
 		machine_entry = self.metrics.machine_stats_dict[gpu_addr]
 		self.metrics.num_requests_finished += 1
 		machine_entry['num_requests_finished'] += 1
@@ -174,7 +206,13 @@ class Client:
 			self.metrics.max_request_latency = max(self.metrics.max_request_latency, time_elapsed)
 			self.metrics.total_tokens_generated += num_tokens
 			machine_entry["total_tokens_generated"] += num_tokens
-		self.metrics.lock.release()
+
+			if first_msg_wait:
+				self.metrics.min_first_msg_wait = min(self.metrics.min_first_msg_wait, first_msg_wait)
+				self.metrics.max_first_msg_wait = max(self.metrics.max_first_msg_wait, first_msg_wait)
+				self.metrics.total_first_msg_wait += first_msg_wait
+
+		# self.metrics.lock.release()
 
 	def send_prompt_vllm_server(self, text_prompt):
 		start_time = time.time()
@@ -187,26 +225,25 @@ class Client:
 	def send_prompt(self, text_prompt, id, num_tokens=100):
 		request_dict = {"num_tokens" : num_tokens}
 		URI = f'http://{self.lb_server_addr}/connect'
-		self.metrics.lock.acquire()
+		# self.metrics.lock.acquire()
 		self.metrics.num_serverless_server_started += 1
-		self.metrics.lock.release()
+		# self.metrics.lock.release()
 		response = requests.get(URI, json=request_dict)
-		self.metrics.lock.acquire()
+		# self.metrics.lock.acquire()
 		self.metrics.num_serverless_server_finished += 1
-		self.metrics.lock.release()
+		# self.metrics.lock.release()
 
 		if response.status_code == 200 and response.json()["addr"] is not None:
-			self.metrics.lock.acquire()
-			self.metrics.num_requests_started += 1
-			self.metrics.lock.release()
 			gpu_addr = response.json()["addr"]
 			id_token = response.json()["token"]
+			self.update_metrics_started(gpu_addr)
 			start_time = time.time()
-			gpu_response = send_vllm_request_auth(gpu_addr, id_token, text_prompt)
+			# gpu_response = send_vllm_request_auth(gpu_addr, id_token, text_prompt)
+			gpu_response = send_vllm_request_streaming(gpu_addr, id_token, text_prompt)
 			end_time = time.time()
 			time_elapsed = end_time - start_time
 			success = (gpu_response["reply"] is not None)
-			self.update_metrics(gpu_addr, success, gpu_response["num_tokens"], time_elapsed)
+			self.update_metrics(gpu_addr, success, gpu_response["num_tokens"], time_elapsed, gpu_response["first_msg_wait"])
 			if not success:
 				self.error_lock.acquire()
 				os.write(self.error_fd, f"{gpu_response['error']}\n".encode("utf-8"))

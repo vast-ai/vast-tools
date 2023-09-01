@@ -1,35 +1,51 @@
 {
     "vllm-13": {
         "get": {
-            "gpu_ram" : 26.0,
+            "gpu" : [
+                {
+                    "gpu_ram" : 26.0,
+                    "num_gpus" : 1
+                }
+            ],
             "disk_space" : 50.0
         },
         "create": {
-            "onstart" : "on_start_13B.sh",
+            "onstart" : "scripts/on_start_13B.sh",
             "image" : "atinoda/text-generation-webui:default-nightly",
             "disk" : "50.0",
-            "env" : "-e HF_TOKEN=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"
+            "env" : "-e HF_TOKEN=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 -e MODEL_PATH='/src/models/meta-llama_Llama-2-13b-hf'"
         }
     },
     "vllm-70": {
         "get": {
-            "gpu_ram" : 140.0,
-            "disk_space" : 100.0
+            "gpu" : [
+                {
+                    "gpu_name" : "A100_SXM4",
+                    "num_gpus" : 2
+                }
+            ],
+            "disk_space" : 133.0
         },
         "create": {
-            "onstart" : "on_start_70B.sh",
+            "onstart" : "scripts/on_start_70B.sh",
             "image" : "atinoda/text-generation-webui:default-nightly",
-            "disk" : "100.0",
-            "env" : "-e HF_TOKEN=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"
+            "disk" : "133.0",
+            "env" : "-e HF_TOKEN=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 -e MODEL_PATH='/src/models/meta-llama_Llama-2-70b-chat-hf'"
+
         }
     },
     "dev": {
         "get": {
-            "gpu_ram" : 16.0,
+            "gpu" : [
+                {
+                    "gpu_ram" : 16.0,
+                    "num_gpus" : 1
+                }
+            ],
             "disk_space" : 16.0
         },
         "create": {
-            "onstart" : "on_start_dev.sh",
+            "onstart" : "scripts/on_start_dev.sh",
             "image" : "atinoda/text-generation-webui:default-nightly",
             "disk" : "16.0"
         }
