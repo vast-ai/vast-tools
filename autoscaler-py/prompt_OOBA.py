@@ -115,12 +115,7 @@ def send_vllm_request_streaming_test(gpu_server_addr):
 
 
 def main():
-	addr = "89.37.121.214:48271"
-	# id_token = "mtoken"
-	regular_prompt = "What is your name?"
-	# response = format_prompt_request(addr, id_token, regular_prompt, 200)
-	# print(response)
-	send_vllm_request(addr, regular_prompt)
+	pass
 
 if __name__ == "__main__":
 	main()

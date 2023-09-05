@@ -39,7 +39,6 @@
             "image" : "atinoda/text-generation-webui:default-nightly",
             "disk" : "200.0",
             "env" : "-e HF_TOKEN=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 -e MODEL_PATH='/src/models/meta-llama_Llama-2-70b-chat-hf'"
-
         }
     },
     "dev": {
@@ -55,7 +54,8 @@
         "create": {
             "onstart" : "scripts/on_start_dev.sh",
             "image" : "atinoda/text-generation-webui:default-nightly",
-            "disk" : "16.0"
+            "disk" : "16.0",
+            "env" : "-e HF_TOKEN=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 -e MODEL_PATH='/src/models/TheBloke_Llama-2-13B-chat-GPTQ'"
         }
     }
 

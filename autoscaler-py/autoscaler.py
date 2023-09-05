@@ -13,7 +13,7 @@ TIME_INTERVAL_SECONDS = 5
 MAX_COST_PER_HOUR = 10.0
 MAX_CONCURRENCY = 100
 INSTANCE_CONFIG_NAME = "configs/OOBA_configs.json"
-IGNORE_INSTANCE_IDS = []
+IGNORE_INSTANCE_IDS = [6899196, 6897883]
 BAD_MACHINE_IDS = [4424]
 ERROR_STRINGS = ["safetensors_rust.SafetensorError", "RuntimeError", "Error: remote port forwarding failed"]
 TEST_PROMPT = "What?"
@@ -88,7 +88,7 @@ class InstanceSetMetrics: #Represents metrics that the client would have availab
 		return ret
 
 class InstanceSet:
-	def __init__(self, cold_set_size=0, manage=True):
+	def __init__(self, manage=True, streaming=True, model="dev"):
 		self.num_hot = 0
 		self.num_busy = 0
 		self.ready_instances = []
@@ -101,13 +101,14 @@ class InstanceSet:
 		self.bad_instance_ids = []
 		self.ignore_instance_ids = IGNORE_INSTANCE_IDS
 
-		self.streaming = True
+		self.streaming = streaming
+		self.manage = manage
+		self.model = model
 
 		self.cost_dict = {}
 		self.metrics = InstanceSetMetrics()
 		self.lock = Lock()
-		self.manage = manage
-
+		
 		self.update_instance_info(manage=self.manage, init=True)
 		self.strat = SimpleStrategy(avg_num_hot=len(self.hot_instances) + len(self.loading_instances) + len(self.cold_instances))
 
@@ -118,10 +119,10 @@ class InstanceSet:
 		self.manage_threads = []
 		self.p1 = Thread(target=self.update_and_manage_background, args=(self.exit_event, self.manage,))
 		self.p1.start()
-		self.cold_set_size = cold_set_size
-		if cold_set_size > 0:
-			self.p2 = Thread(target=self.create_cold_set, args=(self.exit_event, cold_set_size,))
-			self.p2.start()
+		# self.cold_set_size = cold_set_size
+		# if cold_set_size > 0:
+		# 	self.p2 = Thread(target=self.create_cold_set, args=(self.exit_event, cold_set_size,))
+		# 	self.p2.start()
 
 	def deconstruct(self):
 		print("[autoscaler] deconstructing")
@@ -207,44 +208,43 @@ class InstanceSet:
 		if manage:
 			self.update_ready_instances()
 
-	def check_server_error(self, instance): #will hang, might need to find a faster way to do this
-		port_num = str(instance["ssh_port"])
-		host = instance["ssh_host"]
-		result = subprocess.run([f"ssh -p {port_num} -o StrictHostKeyChecking=no root@{host} grep -E '{ERROR_STRINGS[0]}|{ERROR_STRINGS[1]}' /app/onstart.log"], shell=True, capture_output=True)
-		out = result.stdout
-		if out is not None and ((ERROR_STRINGS[0] in out.decode('utf-8')) or (ERROR_STRINGS[1] in out.decode('utf-8'))):
-			return True
-		else:
-			return False
+	# def check_server_error(self, instance): #will hang, might need to find a faster way to do this
+	# 	port_num = str(instance["ssh_port"])
+	# 	host = instance["ssh_host"]
+	# 	result = subprocess.run([f"ssh -p {port_num} -o StrictHostKeyChecking=no root@{host} grep -E '{ERROR_STRINGS[0]}|{ERROR_STRINGS[1]}' /app/onstart.log"], shell=True, capture_output=True)
+	# 	out = result.stdout
+	# 	if out is not None and ((ERROR_STRINGS[0] in out.decode('utf-8')) or (ERROR_STRINGS[1] in out.decode('utf-8'))):
+	# 		return True
+	# 	else:
+	# 		return False
 
-	def find_error_instances(self):
-		self.lock.acquire()
+	# def find_error_instances(self):
+	# 	self.lock.acquire()
 
-		loaded_but_not_hot = [inst for inst in self.hot_instances if inst not in self.ready_instances]
-		# loaded_but_not_hot = [self.hot_instances[0]] if len(self.hot_instances) != 0 else []
-		if len(loaded_but_not_hot) == 0:
-			self.lock.release()
-			return
+	# 	loaded_but_not_hot = [inst for inst in self.hot_instances if inst not in self.ready_instances]
+	# 	# loaded_but_not_hot = [self.hot_instances[0]] if len(self.hot_instances) != 0 else []
+	# 	if len(loaded_but_not_hot) == 0:
+	# 		self.lock.release()
+	# 		return
 
-		error_instance_ids = []
-		with ThreadPoolExecutor(MAX_CONCURRENCY) as e:
-			for instance, result in zip(loaded_but_not_hot, e.map(self.check_server_error, loaded_but_not_hot)):
-				if result:
-					error_instance_ids.append(instance["id"])
+	# 	error_instance_ids = []
+	# 	with ThreadPoolExecutor(MAX_CONCURRENCY) as e:
+	# 		for instance, result in zip(loaded_but_not_hot, e.map(self.check_server_error, loaded_but_not_hot)):
+	# 			if result:
+	# 				error_instance_ids.append(instance["id"])
 
-		self.lock.release()
-		return error_instance_ids
+	# 	self.lock.release()
+	# 	return error_instance_ids
 
-	def zero_ready_log(self, instance):
-		port_num = str(instance["ssh_port"])
-		host = instance["ssh_host"]
-		ssh_string = f"ssh -p {port_num} -o StrictHostKeyChecking=no root@{host}"
-		command_string1 = f"cp /app/onstart.log /app/onstart_og.log"
-		command_string2 = f"echo -n '' > /app/onstart.log"
-		result = subprocess.run([ssh_string + command_string1], shell=True, capture_output=True)
-		result = subprocess.run([ssh_string + command_string2], shell=True, capture_output=True)
+	# def zero_ready_log(self, instance):
+	# 	port_num = str(instance["ssh_port"])
+	# 	host = instance["ssh_host"]
+	# 	ssh_string = f"ssh -p {port_num} -o StrictHostKeyChecking=no root@{host}"
+	# 	command_string1 = f"cp /app/onstart.log /app/onstart_og.log"
+	# 	command_string2 = f"echo -n '' > /app/onstart.log"
+	# 	result = subprocess.run([ssh_string + command_string1], shell=True, capture_output=True)
+	# 	result = subprocess.run([ssh_string + command_string2], shell=True, capture_output=True)
 
-	#!!! need better checking here for ssh permissions error !!!
 	def check_server_ready(self, instance): #could get notified by the server directly in the future
 		port_num = str(instance["ssh_port"])
 		host = instance["ssh_host"]
@@ -310,10 +310,10 @@ class InstanceSet:
 		self.ready_instances = next_ready_instances
 		self.lock.release()
 
-	def manage_join(self):
-		for t in self.manage_threads:
-			t.join()
-		self.manage_threads = []
+	# def manage_join(self):
+	# 	for t in self.manage_threads:
+	# 		t.join()
+	# 	self.manage_threads = []
 
 	def manage_instances(self, manage=True):
 		self.lock.acquire()
@@ -382,9 +382,9 @@ class InstanceSet:
 		self.lock.release()
 	############################### vastai API Helper Functions ##########################################################
 
-	def get_asks(self, model, budget=True):
+	def get_asks(self, budget=True):
 		ask_list = []
-		config = self.instance_config[model]["get"]
+		config = self.instance_config[self.model]["get"]
 		gpu_configs = config["gpu"]
 		disk_args =  f"disk_space >= {config['disk_space']}"
 		order = "dph" if budget else "dlperf_per_dphtotal"
@@ -406,19 +406,19 @@ class InstanceSet:
 
 		return ask_list
 
-	def create_cold_set(self, event, num_instances):
-		self.create_instances(num_instances, model="vllm-13")
-		while not event.is_set():
-			for ready_instance in self.ready_instances:
-				self.stop_instance(ready_instance['id'])
-				print(f"[autoscaler] id: {ready_instance['id']} is now ready and cold")
-			time.sleep(TIME_INTERVAL_SECONDS)
-		print("[autoscaler] done creating cold set")
+	# def create_cold_set(self, event, num_instances):
+	# 	self.create_instances(num_instances, model="vllm-13")
+	# 	while not event.is_set():
+	# 		for ready_instance in self.ready_instances:
+	# 			self.stop_instance(ready_instance['id'])
+	# 			print(f"[autoscaler] id: {ready_instance['id']} is now ready and cold")
+	# 		time.sleep(TIME_INTERVAL_SECONDS)
+	# 	print("[autoscaler] done creating cold set")
 
-	def create_instances(self, num_instances, model="vllm-70"):
-		ask_list = self.get_asks(model=model)
+	def create_instances(self, num_instances):
+		ask_list = self.get_asks()
 		for instance in ask_list:
-			instance["model"] = model
+			instance["model"] = self.model
 		self.act_on_instances(self.create_instance, num_instances, ask_list)
 
 	def start_instances(self, num_instances):
@@ -459,10 +459,12 @@ class InstanceSet:
 		result = subprocess.run(["vastai", "stop", "instance", str(instance_id), "--raw"], capture_output=True)
 		return True
 
-	def create_instance(self, instance, model="vllm-70"):
+	def create_instance(self, instance):
 		instance_id = instance["id"]
 		if "model" in instance.keys():
 			model = instance["model"]
+		else:
+			model = self.model
 		num_gpus = instance["num_gpus"]
 		config = self.instance_config[model]["create"]
 		mtoken = secrets.token_hex(32)
