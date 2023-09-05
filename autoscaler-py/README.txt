@@ -11,10 +11,6 @@ of this guide: https://vast.ai/docs/cli/quickstart
 To set up the autoscaler simulation, you must start the flask webserver that acts as the interface
 to the autoscaler, as well as run sim.py to drive the simulation.
 
-To set up the webserver:
-export FLASK_APP=server.py
-flask run
-
 To run sim.py:
 python sim.py
 
