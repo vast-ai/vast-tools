@@ -152,8 +152,7 @@ class InstanceSet:
 		while not event.is_set():
 			print("[autoscaler] ticking")
 			self.update_instance_info(manage, init=False)
-			if manage:
-				self.manage_instances()
+			self.manage_instances(manage)
 			time.sleep(TIME_INTERVAL_SECONDS)
 
 	def read_instance_json(self, instance):
@@ -316,12 +315,12 @@ class InstanceSet:
 			t.join()
 		self.manage_threads = []
 
-	def manage_instances(self):
+	def manage_instances(self, manage=True):
 		self.lock.acquire()
 
-		# print("[autoscaler] dealing with bad instances")
-		# self.act_on_instances(self.destroy_instance, len(self.bad_instance_ids), self.bad_instance_ids)
-		# self.bad_instance_ids = []
+		print("[autoscaler] dealing with bad instances")
+		self.act_on_instances(self.destroy_instance, len(self.bad_instance_ids), self.bad_instance_ids)
+		self.bad_instance_ids = []
 
 		if self.num_busy > self.strat.avg_num_busy:
 			num_hot_busy = self.num_busy
@@ -346,44 +345,39 @@ class InstanceSet:
 		print(f"[autoscaler] internal lists: len(self.hot_instances): {len(self.hot_instances)}, len(self.ready_instances): {len(self.ready_instances)}")
 		print("[autoscaler] managing instances: hot_busy_ratio: {}, hot_ratio: {}, hot_ratio_rolling: {}, num_hot: {}, num_busy: {}, num_cold_ready: {}, num_loading: {}, num_total: {}".format(hot_busy_ratio, hot_ratio, hot_ratio_rolling, num_hot, num_hot_busy, len(self.cold_instances), num_loading, num_tot))
 
-		#stop and start instances
-		self.lock.release()
-		return
-		if hot_busy_ratio < self.strat.target_hot_busy_ratio_lower:
-			print("[autoscaler] hot busy ratio too low!")
-			count = num_hot - int((hot_busy_ratio / self.strat.target_hot_busy_ratio_lower) * max(num_hot, 1))
-			#maybe I can filter for idle here
-			hot_instances = self.hot_instances[::-1]
-			stop_thread = Thread(target=self.act_on_instances, args=(self.stop_instance, count, hot_instances))
-			# self.manage_threads.append(stop_thread)
-			stop_thread.start()
-			stop_thread.join()
+		if manage:
+			#stop and start instances
+			if hot_busy_ratio < self.strat.target_hot_busy_ratio_lower:
+				print("[autoscaler] hot busy ratio too low!")
+				count = num_hot - int((hot_busy_ratio / self.strat.target_hot_busy_ratio_lower) * max(num_hot, 1))
+				#maybe I can filter for idle here
+				hot_instances = self.hot_instances[::-1]
+				stop_thread = Thread(target=self.act_on_instances, args=(self.stop_instance, count, hot_instances))
+				stop_thread.start()
+				stop_thread.join()
 
-		elif hot_busy_ratio >= self.strat.target_hot_busy_ratio_upper:
-			print("[autoscaler] hot busy ratio too high!")
-			count = int((hot_busy_ratio / self.strat.target_hot_busy_ratio_upper) * max(num_hot, 1)) - num_hot
-			start_thread = Thread(target=self.act_on_instances, args=(self.start_instance, count, self.cold_instances))
-			# self.manage_threads.append(start_thread)
-			start_thread.start()
-			start_thread.join()
+			elif hot_busy_ratio >= self.strat.target_hot_busy_ratio_upper:
+				print("[autoscaler] hot busy ratio too high!")
+				count = int((hot_busy_ratio / self.strat.target_hot_busy_ratio_upper) * max(num_hot, 1)) - num_hot
+				start_thread = Thread(target=self.act_on_instances, args=(self.start_instance, count, self.cold_instances))
+				start_thread.start()
+				start_thread.join()
 
-		#create and destroy instances
-		if hot_ratio > self.strat.target_hot_ratio:
-			print("[autoscaler] hot ratio too high!")
-			count = int((hot_ratio / self.strat.target_hot_ratio) * max(num_tot, 1)) - num_tot
-			create_thread = Thread(target=self.act_on_instances, args=(self.create_instance, count, self.get_asks(budget=True)))
-			# self.manage_threads.append(create_thread)
-			create_thread.start()
-			create_thread.join()
+			#create and destroy instances
+			if hot_ratio > self.strat.target_hot_ratio:
+				print("[autoscaler] hot ratio too high!")
+				count = int((hot_ratio / self.strat.target_hot_ratio) * max(num_tot, 1)) - num_tot
+				create_thread = Thread(target=self.act_on_instances, args=(self.create_instance, count, self.get_asks(budget=True)))
+				create_thread.start()
+				create_thread.join()
 
-		elif hot_ratio_rolling < self.strat.target_hot_ratio:
-			print("[autoscaler] hot ratio too low!")
-			count = num_tot - int((hot_ratio_rolling / self.strat.target_hot_ratio) * max(num_tot, 1))
-			cold_instances = self.cold_instances[::-1]
-			destroy_thread = Thread(target=self.act_on_instances, args=(self.destroy_instance, count, cold_instances))
-			# self.manage_threads.append(destroy_thread)
-			destroy_thread.start()
-			destroy_thread.join()
+			elif hot_ratio_rolling < self.strat.target_hot_ratio:
+				print("[autoscaler] hot ratio too low!")
+				count = num_tot - int((hot_ratio_rolling / self.strat.target_hot_ratio) * max(num_tot, 1))
+				cold_instances = self.cold_instances[::-1]
+				destroy_thread = Thread(target=self.act_on_instances, args=(self.destroy_instance, count, cold_instances))
+				destroy_thread.start()
+				destroy_thread.join()
 
 		self.lock.release()
 	############################### vastai API Helper Functions ##########################################################
@@ -408,9 +402,7 @@ class InstanceSet:
 			result = subprocess.run(["vastai search offers " + full_args + " --raw"], shell=True, capture_output=True)
 			listed_instances = result.stdout.decode('utf-8')
 			if listed_instances and listed_instances[0] == '[':
-				# print(listed_instances)
 				ask_list += json.loads(listed_instances)
-				print(len(ask_list))
 
 		return ask_list
 
