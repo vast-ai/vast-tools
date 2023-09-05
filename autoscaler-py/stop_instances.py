@@ -1,4 +1,4 @@
-from ..autoscaler import InstanceSet
+from autoscaler import InstanceSet
 
 def main():
     instances = InstanceSet(manage=False)

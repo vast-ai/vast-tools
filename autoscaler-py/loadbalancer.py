@@ -12,8 +12,11 @@ FULL_LOAD_THRESHOLD = 2.5
 DEFAULT_TPS = 35.0
 MAX_CONCURRENCY = 100
 
-def get_address_auth(instance):
-	addr = instance["public_ipaddr"] + ":" + instance["ports"]["5005/tcp"][0]["HostPort"]
+def get_address_auth(instance, streaming):
+	if streaming:
+		addr = instance["public_ipaddr"] + ":" + instance["ports"]["5005/tcp"][0]["HostPort"]
+	else:
+		addr = instance["public_ipaddr"] + ":" + instance["ports"]["5000/tcp"][0]["HostPort"]
 	addr = addr.replace('\n', '')
 	return addr
 
@@ -23,7 +26,7 @@ def get_address(instance):
 	return addr
 
 class LoadBalancer:
-	def __init__(self, cold_set_size=0, manage=True):
+	def __init__(self, cold_set_size=0, manage=True, streaming=False):
 		self.client = Client()
 
 		self.old_ready_ids = [] #need a better system to delay busy classification of new instances
@@ -34,6 +37,8 @@ class LoadBalancer:
 
 		self.lock = Lock()
 		self.exit_event = Event()
+
+		self.streaming = streaming
 
 		self.client.setup_autoscaler()
 		self.update_ready_queue()
@@ -54,7 +59,7 @@ class LoadBalancer:
 			if id in self.old_ready_ids:
 				num_ready += 1
 			else:
-				self.instance_clients[id] = InstanceClient(ready_instance["id"], get_address_auth(ready_instance), ready_instance["mtoken"])
+				self.instance_clients[id] = InstanceClient(ready_instance["id"], get_address_auth(ready_instance, streaming=self.streaming), ready_instance["mtoken"])
 
 			ready_queue.put((queue_duration[id], id, ready_instance))
 			ready_ids.append(id)

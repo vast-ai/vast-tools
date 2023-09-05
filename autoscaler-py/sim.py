@@ -30,7 +30,7 @@ class User:
 		self.lock = Lock()
 
 class Sim:
-	def __init__(self, num_iters, base_num_users, base_rate, etime):
+	def __init__(self, num_iters, base_num_users, base_rate, etime, streaming):
 		self.users = []
 
 		self.num_iters = num_iters
@@ -38,7 +38,8 @@ class Sim:
 		self.base_rate = base_rate
 		self.etime = etime
 
-		self.client = Client()
+		self.streaming = streaming
+		self.client = Client(streaming=streaming)
 		self.req_num = 0
 		self.proc = psutil.Process(os.getpid())
 
@@ -137,7 +138,7 @@ class Sim:
 		self.client.shutdown_lb()
 
 def main():
-	sim = Sim(num_iters=100, base_num_users=200, base_rate=1.0 * (15 / 60), etime=2.0)
+	sim = Sim(num_iters=50, base_num_users=100, base_rate=1.0 * (15 / 60), etime=2.0, streaming=False)
 	sim.run()
 
 if __name__ == "__main__":

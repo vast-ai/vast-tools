@@ -13,8 +13,10 @@ from prompt_OOBA import send_vllm_request, send_vllm_request_auth, send_vllm_req
 WAIT_INTERVAL = 5
 
 class ClientMetrics:
-	def __init__(self):
+	def __init__(self, streaming):
 
+		self.streaming = streaming
+		
 		self.num_serverless_server_started = 0
 		self.num_serverless_server_finished = 0
 
@@ -23,7 +25,7 @@ class ClientMetrics:
 		self.num_requests_successful = 0
 		self.total_tokens_generated = 0
 
-		self.balance = 0.0
+		# self.balance = 0.0
 		self.total_cost = 0.0
 
 		self.total_request_time = 0.0 #elapsed time across all successful requests
@@ -40,7 +42,7 @@ class ClientMetrics:
 		self.machine_stats_dict = defaultdict(lambda: default_value.copy())
 
 		self.lock = Lock()
-		self.zero_costs()
+		# self.zero_costs()
 
 	#call below with lock LOCKED
 	def get_time_elapsed(self):
@@ -69,16 +71,16 @@ class ClientMetrics:
 			ret = 0.0
 		return ret
 
-	def zero_costs(self):
-		result = subprocess.run([f"vastai show invoices --raw"], shell=True, capture_output=True)
-		transactions = json.loads(result.stdout.decode('utf-8'))
-		balance = 0.0
-		for t in transactions:
-			if "is_credit" in t.keys():
-				balance += float(t["amount"])
-			else:
-				balance -= float(t["amount"])
-		self.balance = balance
+	# def zero_costs(self):
+	# 	result = subprocess.run([f"vastai show invoices --raw"], shell=True, capture_output=True)
+	# 	transactions = json.loads(result.stdout.decode('utf-8'))
+	# 	balance = 0.0
+	# 	for t in transactions:
+	# 		if "is_credit" in t.keys():
+	# 			balance += float(t["amount"])
+	# 		else:
+	# 			balance -= float(t["amount"])
+	# 	self.balance = balance
 
 	def calculate_costs(self):
 		instances = None
@@ -95,7 +97,6 @@ class ClientMetrics:
 				continue
 			if get_address(instance) in self.machine_stats_dict.keys():
 				dph += instance["dph_base"]
-		print(dph)
 		self.total_cost = (self.get_time_elapsed() / (60 * 60)) * dph
 
 	def get_total_cost(self):
@@ -143,7 +144,7 @@ class ClientMetrics:
 		print("min request latency: {}".format(self.min_request_latency))
 		print("max request latency: {}".format(self.max_request_latency))
 
-		if self.total_first_msg_wait != 0.0:
+		if self.streaming != 0.0:
 			print("avg first msg wait: {}".format(self.get_average_first_msg_wait()))
 			print("min first msg wait: {}".format(self.min_first_msg_wait))
 			print("max first msg wait: {}".format(self.max_first_msg_wait))
@@ -159,8 +160,9 @@ class ClientMetrics:
 		# self.lock.release()
 
 class Client:
-	def __init__(self):
-		self.metrics = ClientMetrics()
+	def __init__(self, streaming=False):
+		self.streaming = streaming
+		self.metrics = ClientMetrics(streaming=streaming)
 		self.lb_server_addr = '127.0.0.1:5000'
 		self.auto_server_addr = '127.0.0.1:8000'
 		# self.vllm_server_addr = '89.37.121.214:48271'
@@ -238,8 +240,11 @@ class Client:
 			id_token = response.json()["token"]
 			self.update_metrics_started(gpu_addr)
 			start_time = time.time()
-			# gpu_response = send_vllm_request_auth(gpu_addr, id_token, text_prompt)
-			gpu_response = send_vllm_request_streaming(gpu_addr, id_token, text_prompt)
+			if self.streaming:
+				gpu_response = send_vllm_request_streaming(gpu_addr, id_token, text_prompt)
+			else:
+				gpu_response = send_vllm_request_auth(gpu_addr, id_token, text_prompt)
+			
 			end_time = time.time()
 			time_elapsed = end_time - start_time
 			success = (gpu_response["reply"] is not None)

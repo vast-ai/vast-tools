@@ -12,6 +12,7 @@ from prompt_OOBA import send_vllm_request_auth, send_vllm_request_streaming_test
 TIME_INTERVAL_SECONDS = 5
 MAX_COST_PER_HOUR = 10.0
 MAX_CONCURRENCY = 100
+MAX_ACTIONS = 2
 INSTANCE_CONFIG_NAME = "configs/OOBA_configs.json"
 IGNORE_INSTANCE_IDS = [6899196, 6897883]
 BAD_MACHINE_IDS = [4424]
@@ -88,7 +89,7 @@ class InstanceSetMetrics: #Represents metrics that the client would have availab
 		return ret
 
 class InstanceSet:
-	def __init__(self, manage=True, streaming=True, model="dev"):
+	def __init__(self, manage=False, streaming=False, model="vllm-13"):
 		self.num_hot = 0
 		self.num_busy = 0
 		self.ready_instances = []
@@ -128,8 +129,8 @@ class InstanceSet:
 		print("[autoscaler] deconstructing")
 		self.exit_event.set()
 		self.p1.join()
-		if self.cold_set_size > 0:
-			self.p2.join()
+		# if self.cold_set_size > 0:
+		# 	self.p2.join()
 
 	def update_tokens_per_second(self, instance): #need lock here?
 		port_num = str(instance["ssh_port"])
@@ -281,7 +282,7 @@ class InstanceSet:
 		if len(hot_instances) == 0:
 			return
 
-		hot_but_not_ready = [i for i in hot_instances if i not in ready_instances]
+		hot_but_not_ready = [i for i in hot_instances if ((i not in ready_instances) and (i["id"] not in self.ignore_instance_ids))]
 		new_ready_instances = []
 		with ThreadPoolExecutor(MAX_CONCURRENCY) as e:
 			for instance, result in zip(hot_but_not_ready, e.map(self.check_server_ready, hot_but_not_ready)):
@@ -318,9 +319,9 @@ class InstanceSet:
 	def manage_instances(self, manage=True):
 		self.lock.acquire()
 
-		print("[autoscaler] dealing with bad instances")
-		self.act_on_instances(self.destroy_instance, len(self.bad_instance_ids), self.bad_instance_ids)
-		self.bad_instance_ids = []
+		# print("[autoscaler] dealing with bad instances")
+		# self.act_on_instances(self.destroy_instance, len(self.bad_instance_ids), self.bad_instance_ids)
+		# self.bad_instance_ids = []
 
 		if self.num_busy > self.strat.avg_num_busy:
 			num_hot_busy = self.num_busy
@@ -425,6 +426,7 @@ class InstanceSet:
 		self.act_on_instances(self.start_instance, num_instances, self.cold_instances)
 
 	def act_on_instances(self, action, num_instances, instance_list):
+		num_instances = max(num_instances, MAX_ACTIONS)
 		print(f"[autoscaler] calling {action.__name__} on {num_instances} instances, len(instance_list): {len(instance_list)}")
 		if instance_list is None or len(instance_list) == 0:
 			return

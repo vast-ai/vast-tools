@@ -12,7 +12,7 @@ autoscaler = None
 @app.route("/setup", methods=['POST'])
 def setup_autoscaler():
     global autoscaler
-    autoscaler = InstanceSet(manage=True, streaming=True)
+    autoscaler = InstanceSet()
     return "Started InstanceSet"
 
 @app.route("/destroy", methods=['POST'])
