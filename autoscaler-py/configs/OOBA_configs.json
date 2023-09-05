@@ -22,14 +22,22 @@
                 {
                     "gpu_name" : "A100_SXM4",
                     "num_gpus" : 2
+                },
+                {
+                    "gpu_name" : "RTX_A6000",
+                    "num_gpus" : 4
+                },
+                {
+                    "gpu_name" : "RTX_4090",
+                    "num_gpus" : 8
                 }
             ],
-            "disk_space" : 133.0
+            "disk_space" : 200.0
         },
         "create": {
             "onstart" : "scripts/on_start_70B.sh",
             "image" : "atinoda/text-generation-webui:default-nightly",
-            "disk" : "133.0",
+            "disk" : "200.0",
             "env" : "-e HF_TOKEN=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 -e MODEL_PATH='/src/models/meta-llama_Llama-2-70b-chat-hf'"
 
         }
