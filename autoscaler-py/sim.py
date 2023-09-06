@@ -138,7 +138,7 @@ class Sim:
 		self.client.shutdown_lb()
 
 def main():
-	sim = Sim(num_iters=50, base_num_users=100, base_rate=1.0 * (15 / 60), etime=2.0, streaming=False)
+	sim = Sim(num_iters=50, base_num_users=50, base_rate=1.0 * (15 / 60), etime=2.0, streaming=True)
 	sim.run()
 
 if __name__ == "__main__":

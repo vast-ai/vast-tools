@@ -3,6 +3,8 @@ import json
 import time
 from websockets.sync.client import connect
 
+MSG_END = "$$$"
+
 ooba_dict = {
 	'auto_max_new_tokens': False,
 
@@ -101,10 +103,45 @@ def send_vllm_request_streaming(gpu_server_addr, id_token, text_prompt):
 			response += message
 	return {"reply" : response, "error" : None, "num_tokens" : 50, "first_msg_wait" : first_msg_wait}
 
+def send_vllm_request_streaming_auth(gpu_server_addr, id_token, text_prompt):
+	response = ""
+	first_msg_wait = 0.0
+	first = True
+	with connect(f"ws://{gpu_server_addr}/") as websocket:
+		websocket.send(id_token)
+		websocket.send(MSG_END)
+
+		websocket.send(text_prompt)
+		websocket.send(MSG_END)
+
+		t1 = time.time()
+		for message in websocket:
+			if first:
+				t2 = time.time()
+				first_msg_wait = t2 - t1
+				first = False
+			response += message
+	return {"reply" : response, "error" : None, "num_tokens" : 50, "first_msg_wait" : first_msg_wait}
+
 def send_vllm_request_streaming_test(gpu_server_addr):
 	response = ""
 	with connect(f"ws://{gpu_server_addr}/") as websocket:
 		websocket.send("Hello?")
+		for message in websocket:
+			response += message
+	print(response)
+	if response != "":
+		return True
+	else:
+		return False
+
+def send_vllm_request_streaming_test_auth(gpu_server_addr, mtoken):
+	response = ""
+	with connect(f"ws://{gpu_server_addr}/") as websocket:
+		websocket.send(mtoken)
+		websocket.send(MSG_END)
+		websocket.send("Hello?")
+		websocket.send(MSG_END)
 		for message in websocket:
 			response += message
 	print(response)

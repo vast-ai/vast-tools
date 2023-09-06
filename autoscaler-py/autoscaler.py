@@ -7,7 +7,7 @@ import json
 import secrets
 import os
 from ratio_manager import update_rolling_average
-from prompt_OOBA import send_vllm_request_auth, send_vllm_request_streaming_test
+from prompt_OOBA import send_vllm_request_auth, send_vllm_request_streaming_test, send_vllm_request_streaming_test_auth
 
 TIME_INTERVAL_SECONDS = 5
 MAX_COST_PER_HOUR = 10.0
@@ -109,7 +109,7 @@ class InstanceSet:
 		self.cost_dict = {}
 		self.metrics = InstanceSetMetrics()
 		self.lock = Lock()
-		
+
 		self.update_instance_info(manage=self.manage, init=True)
 		self.strat = SimpleStrategy(avg_num_hot=len(self.hot_instances) + len(self.loading_instances) + len(self.cold_instances))
 
@@ -254,6 +254,7 @@ class InstanceSet:
 		ready_str = "Serving Flask app 'model_inference_server'"
 		command_string = f"grep '{ready_str}' /src/infer.log | tail -n 1"
 		result = subprocess.run([ssh_string + " " + command_string], shell=True, capture_output=True)
+		print(f"ready result: {result}")
 		out = result.stdout
 		if out is not None and ready_str in out.decode('utf-8'):
 			return True
@@ -264,7 +265,7 @@ class InstanceSet:
 	def test_ready_instance(self, instance, token):
 		addr = get_address(instance)
 		if self.streaming:
-			return send_vllm_request_streaming_test(addr)
+			return send_vllm_request_streaming_test_auth(addr, token)
 
 		response = send_vllm_request_auth(addr, token, TEST_PROMPT)
 		if response["reply"] is not None:

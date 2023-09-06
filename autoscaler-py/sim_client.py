@@ -8,7 +8,7 @@ import os
 
 from autoscaler import get_curr_instances
 from loadbalancer import get_address
-from prompt_OOBA import send_vllm_request, send_vllm_request_auth, send_vllm_request_streaming
+from prompt_OOBA import send_vllm_request, send_vllm_request_auth, send_vllm_request_streaming, send_vllm_request_streaming_auth
 
 WAIT_INTERVAL = 5
 
@@ -16,7 +16,7 @@ class ClientMetrics:
 	def __init__(self, streaming):
 
 		self.streaming = streaming
-		
+
 		self.num_serverless_server_started = 0
 		self.num_serverless_server_finished = 0
 
@@ -241,10 +241,10 @@ class Client:
 			self.update_metrics_started(gpu_addr)
 			start_time = time.time()
 			if self.streaming:
-				gpu_response = send_vllm_request_streaming(gpu_addr, id_token, text_prompt)
+				gpu_response = send_vllm_request_streaming_auth(gpu_addr, id_token, text_prompt)
 			else:
 				gpu_response = send_vllm_request_auth(gpu_addr, id_token, text_prompt)
-			
+
 			end_time = time.time()
 			time_elapsed = end_time - start_time
 			success = (gpu_response["reply"] is not None)
@@ -260,7 +260,6 @@ class Client:
 		if response.status_code == 200:
 			response = response.json()
 			return response
-
 
 	def wait_for_hot(self):
 		num_hot = 0
