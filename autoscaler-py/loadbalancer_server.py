@@ -12,7 +12,8 @@ lb = None
 @app.route('/setup', methods=['POST'])
 def setup_lb():
     global lb
-    lb = LoadBalancer()
+    args = request.json["args"]
+    lb = LoadBalancer(args)
     return "Started Load Balancer and Autoscaler Session"
 
 @app.route('/destroy', methods=['POST'])

@@ -12,7 +12,7 @@ from prompt_OOBA import send_vllm_request_auth, send_vllm_request_streaming_test
 TIME_INTERVAL_SECONDS = 5
 MAX_COST_PER_HOUR = 10.0
 MAX_CONCURRENCY = 100
-MAX_ACTIONS = 2
+MAX_ACTIONS = 3
 INSTANCE_CONFIG_NAME = "configs/OOBA_configs.json"
 IGNORE_INSTANCE_IDS = [6899196, 6897883]
 BAD_MACHINE_IDS = [4424]
@@ -110,7 +110,7 @@ class InstanceSet:
 		self.metrics = InstanceSetMetrics()
 		self.lock = Lock()
 		
-		self.update_instance_info(manage=self.manage, init=True)
+		self.update_instance_info(init=True)
 		self.strat = SimpleStrategy(avg_num_hot=len(self.hot_instances) + len(self.loading_instances) + len(self.cold_instances))
 
 		with open(INSTANCE_CONFIG_NAME, "r") as f:
@@ -118,7 +118,7 @@ class InstanceSet:
 
 		self.exit_event = Event()
 		self.manage_threads = []
-		self.p1 = Thread(target=self.update_and_manage_background, args=(self.exit_event, self.manage,))
+		self.p1 = Thread(target=self.update_and_manage_background, args=(self.exit_event,))
 		self.p1.start()
 		# self.cold_set_size = cold_set_size
 		# if cold_set_size > 0:
@@ -150,11 +150,11 @@ class InstanceSet:
 		# 	with open(f"instance_info/{instance['machine_id']}.json", "w") as f:
 		# 		json.dump(instance, f)
 
-	def update_and_manage_background(self, event, manage=True):
+	def update_and_manage_background(self, event):
 		while not event.is_set():
 			print("[autoscaler] ticking")
-			self.update_instance_info(manage, init=False)
-			self.manage_instances(manage)
+			self.update_instance_info(init=False)
+			self.manage_instances()
 			time.sleep(TIME_INTERVAL_SECONDS)
 
 	def read_instance_json(self, instance):
@@ -168,7 +168,7 @@ class InstanceSet:
 		else:
 			return False
 
-	def update_instance_info(self, manage, init):
+	def update_instance_info(self, init):
 		curr_instances = get_curr_instances()
 		if curr_instances is None:
 			return
@@ -206,8 +206,7 @@ class InstanceSet:
 		self.loading_instances = loading_instances
 		self.lock.release()
 
-		if manage:
-			self.update_ready_instances()
+		self.update_ready_instances()
 
 	# def check_server_error(self, instance): #will hang, might need to find a faster way to do this
 	# 	port_num = str(instance["ssh_port"])
@@ -266,7 +265,9 @@ class InstanceSet:
 		if self.streaming:
 			return send_vllm_request_streaming_test(addr)
 
+		print(f"sending to instance: {instance["id"]}")
 		response = send_vllm_request_auth(addr, token, TEST_PROMPT)
+		print(f"got response from instance: {instance["id"]}")
 		if response["reply"] is not None:
 			if response["num_tokens"] != 0:
 				return True
@@ -316,7 +317,7 @@ class InstanceSet:
 	# 		t.join()
 	# 	self.manage_threads = []
 
-	def manage_instances(self, manage=True):
+	def manage_instances(self):
 		self.lock.acquire()
 
 		# print("[autoscaler] dealing with bad instances")
@@ -346,7 +347,7 @@ class InstanceSet:
 		print(f"[autoscaler] internal lists: len(self.hot_instances): {len(self.hot_instances)}, len(self.ready_instances): {len(self.ready_instances)}")
 		print("[autoscaler] managing instances: hot_busy_ratio: {}, hot_ratio: {}, hot_ratio_rolling: {}, num_hot: {}, num_busy: {}, num_cold_ready: {}, num_loading: {}, num_total: {}".format(hot_busy_ratio, hot_ratio, hot_ratio_rolling, num_hot, num_hot_busy, len(self.cold_instances), num_loading, num_tot))
 
-		if manage:
+		if self.manage:
 			#stop and start instances
 			if hot_busy_ratio < self.strat.target_hot_busy_ratio_lower:
 				print("[autoscaler] hot busy ratio too low!")
@@ -426,7 +427,7 @@ class InstanceSet:
 		self.act_on_instances(self.start_instance, num_instances, self.cold_instances)
 
 	def act_on_instances(self, action, num_instances, instance_list):
-		num_instances = max(num_instances, MAX_ACTIONS)
+		num_instances = min(num_instances, MAX_ACTIONS)
 		print(f"[autoscaler] calling {action.__name__} on {num_instances} instances, len(instance_list): {len(instance_list)}")
 		if instance_list is None or len(instance_list) == 0:
 			return

@@ -25,7 +25,6 @@ class ClientMetrics:
 		self.num_requests_successful = 0
 		self.total_tokens_generated = 0
 
-		# self.balance = 0.0
 		self.total_cost = 0.0
 
 		self.total_request_time = 0.0 #elapsed time across all successful requests
@@ -42,7 +41,6 @@ class ClientMetrics:
 		self.machine_stats_dict = defaultdict(lambda: default_value.copy())
 
 		self.lock = Lock()
-		# self.zero_costs()
 
 	#call below with lock LOCKED
 	def get_time_elapsed(self):
@@ -70,17 +68,6 @@ class ClientMetrics:
 		else:
 			ret = 0.0
 		return ret
-
-	# def zero_costs(self):
-	# 	result = subprocess.run([f"vastai show invoices --raw"], shell=True, capture_output=True)
-	# 	transactions = json.loads(result.stdout.decode('utf-8'))
-	# 	balance = 0.0
-	# 	for t in transactions:
-	# 		if "is_credit" in t.keys():
-	# 			balance += float(t["amount"])
-	# 		else:
-	# 			balance -= float(t["amount"])
-	# 	self.balance = balance
 
 	def calculate_costs(self):
 		instances = None
@@ -144,7 +131,7 @@ class ClientMetrics:
 		print("min request latency: {}".format(self.min_request_latency))
 		print("max request latency: {}".format(self.max_request_latency))
 
-		if self.streaming != 0.0:
+		if self.streaming:
 			print("avg first msg wait: {}".format(self.get_average_first_msg_wait()))
 			print("min first msg wait: {}".format(self.min_first_msg_wait))
 			print("max first msg wait: {}".format(self.max_first_msg_wait))
@@ -160,8 +147,10 @@ class ClientMetrics:
 		# self.lock.release()
 
 class Client:
-	def __init__(self, streaming=False):
+	def __init__(self, streaming, model, manage):
 		self.streaming = streaming
+		self.model = model
+		self.manage = manage
 		self.metrics = ClientMetrics(streaming=streaming)
 		self.lb_server_addr = '127.0.0.1:5000'
 		self.auto_server_addr = '127.0.0.1:8000'
@@ -172,7 +161,9 @@ class Client:
 
 	def setup_lb(self):
 		URI = f'http://{self.lb_server_addr}/setup'
-		response = requests.post(URI)
+		autoscaler_args = {"streaming" : self.streaming, "manage" : self.manage, "model" : self.model}
+		request_dict = {"args" : autoscaler_args}
+		response = requests.post(URI, json=request_dict)
 		if response.status_code == 200:
 			print("[client] load balancer server set-up succeeded")
 		else:
@@ -216,14 +207,6 @@ class Client:
 
 		# self.metrics.lock.release()
 
-	def send_prompt_vllm_server(self, text_prompt):
-		start_time = time.time()
-		gpu_response = send_vllm_request(self.vllm_server_addr, text_prompt)
-		end_time = time.time()
-		time_elapsed = end_time - start_time
-		success = (gpu_response["reply"] is not None)
-		self.update_metrics(self.vllm_server_addr, success, gpu_response["num_tokens"], time_elapsed)
-
 	def send_prompt(self, text_prompt, id, num_tokens=100):
 		request_dict = {"num_tokens" : num_tokens}
 		URI = f'http://{self.lb_server_addr}/connect'
@@ -260,7 +243,6 @@ class Client:
 		if response.status_code == 200:
 			response = response.json()
 			return response
-
 
 	def wait_for_hot(self):
 		num_hot = 0

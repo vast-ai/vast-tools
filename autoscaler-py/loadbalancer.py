@@ -26,7 +26,7 @@ def get_address(instance):
 	return addr
 
 class LoadBalancer:
-	def __init__(self, cold_set_size=0, manage=True, streaming=False):
+	def __init__(self, autoscaler_args):
 		self.client = Client()
 
 		self.old_ready_ids = [] #need a better system to delay busy classification of new instances
@@ -38,9 +38,9 @@ class LoadBalancer:
 		self.lock = Lock()
 		self.exit_event = Event()
 
-		self.streaming = streaming
+		self.streaming = autoscaler_args["streaming"]
 
-		self.client.setup_autoscaler()
+		self.client.setup_autoscaler(autoscaler_args=autoscaler_args)
 		self.update_ready_queue()
 		self.bt = Thread(target=self.tick_background, args=(self.exit_event, ))
 		self.bt.start()

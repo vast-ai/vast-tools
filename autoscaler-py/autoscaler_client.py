@@ -4,9 +4,10 @@ class Client:
 	def __init__(self):
 		self.auto_server_addr = '127.0.0.1:8000'
 
-	def setup_autoscaler(self):
+	def setup_autoscaler(self, autoscaler_args):
 		URI = f'http://{self.auto_server_addr}/setup'
-		response = requests.post(URI)
+		request_dict = {"args" : autoscaler_args}
+		response = requests.post(URI, json=request_dict)
 		if response.status_code == 200:
 			print("[as-client] autoscaler server set-up succeeded")
 		else:
