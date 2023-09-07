@@ -1,5 +1,5 @@
 from flask import Flask, request
-from autoscaler import InstanceSet, get_address
+from autoscaler import InstanceSet
 import logging
 
 app = Flask(__name__)
@@ -22,13 +22,13 @@ def destroy_autoscaler():
     autoscaler.deconstruct()
     return "Destroyed InstanceSet"
 
-@app.route("/ready", methods=["GET"])
-def get_ready_instances():
+@app.route("/hot", methods=["GET"])
+def get_hot_instances():
     global autoscaler
     autoscaler.lock.acquire()
-    ready_list = autoscaler.ready_instances
+    hot_list = autoscaler.hot_instances
     autoscaler.lock.release()
-    return {"ready_instances" : ready_list}
+    return {"hot_instances" : hot_list}
 
 @app.route("/report",methods=['POST'])
 def report_hot_busy():
@@ -47,11 +47,11 @@ def get_server_metrics():
     cost = autoscaler.metrics.total_cost
     autoscaler.metrics.lock.release()
     tps_dict = {}
-    # for ready_instance in autoscaler.ready_instances:
-    #     if "tokens/s" in ready_instance.keys():
-    #         tps_dict[get_address(ready_instance)] = ready_instance["tokens/s"]
+    # for hot_instance in autoscaler.hot_instances:
+    #     if "tokens/s" in hot_instance.keys():
+    #         tps_dict[get_address(hot_instance)] = hot_instance["tokens/s"]
     #     else:
-    #         tps_dict[get_address(ready_instance)] = None
+    #         tps_dict[get_address(hot_instance)] = None
     return {"total_cost" : cost, "reported_tps" : tps_dict}
 
 @app.route('/status', methods=['GET'])
@@ -62,8 +62,8 @@ def get_server_status():
     autoscaler.lock.release()
     return status
 
-@app.route('/gpu_report_ready', methods=['POST'])
-def gpu_report_ready():
+@app.route('/gpu_report_hot', methods=['POST'])
+def gpu_report_hot():
     pass
 
 if __name__ == '__main__':

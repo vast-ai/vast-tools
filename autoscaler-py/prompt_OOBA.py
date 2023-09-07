@@ -152,7 +152,9 @@ def send_vllm_request_streaming_test_auth(gpu_server_addr, mtoken):
 
 
 def main():
-	pass
+	addr = "31.12.82.146:16100"
+	mtoken = "3ee1bbaab030a853dc5b6104ffb0d7b26e0b3a9a7bc790368822bad56dd9c048"
+	send_vllm_request_streaming_test_auth(addr, mtoken)
 
 if __name__ == "__main__":
 	main()

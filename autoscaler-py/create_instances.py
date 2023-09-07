@@ -16,6 +16,6 @@ if args.num_instances:
 else:
     num_instances = 1
 
-i_set = InstanceSet(manage=False, model=model)
+i_set = InstanceSet(manage=False, model=model, streaming=True)
 i_set.create_instances(num_instances=num_instances)
 i_set.deconstruct()

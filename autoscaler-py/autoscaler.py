@@ -52,8 +52,11 @@ def expected_performance(instance): #could be made more sophisticated, change to
 def get_instance_id(instance):
 	return instance["id"]
 
-def get_address(instance):
-	addr = instance["public_ipaddr"] + ":" + instance["ports"]["5000/tcp"][0]["HostPort"]
+def get_model_address(instance, streaming):
+	if streaming:
+		addr = instance["public_ipaddr"] + ":" + instance["ports"]["5005/tcp"][0]["HostPort"]
+	else:
+		addr = instance["public_ipaddr"] + ":" + instance["ports"]["5000/tcp"][0]["HostPort"]
 	addr = addr.replace('\n', '')
 	return addr
 
@@ -92,8 +95,9 @@ class InstanceSet:
 	def __init__(self, manage=False, streaming=False, model="vllm-13"):
 		self.num_hot = 0
 		self.num_busy = 0
-		self.ready_instances = []
+
 		self.hot_instances = []
+		self.running_instances = []
 		self.loading_instances = []
 		self.cold_instances = [] #assumption is that all cold instances are available to be started
 
@@ -109,14 +113,9 @@ class InstanceSet:
 		self.cost_dict = {}
 		self.metrics = InstanceSetMetrics()
 		self.lock = Lock()
-<<<<<<< HEAD
 		
 		self.update_instance_info(init=True)
-=======
-
-		self.update_instance_info(manage=self.manage, init=True)
->>>>>>> 13f85686f10b0827f0e7f09968b1764661bc48c5
-		self.strat = SimpleStrategy(avg_num_hot=len(self.hot_instances) + len(self.loading_instances) + len(self.cold_instances))
+		self.strat = SimpleStrategy(avg_num_hot=len(self.running_instances) + len(self.loading_instances) + len(self.cold_instances))
 
 		with open(INSTANCE_CONFIG_NAME, "r") as f:
 			self.instance_config = json.load(f)
@@ -125,17 +124,11 @@ class InstanceSet:
 		self.manage_threads = []
 		self.p1 = Thread(target=self.update_and_manage_background, args=(self.exit_event,))
 		self.p1.start()
-		# self.cold_set_size = cold_set_size
-		# if cold_set_size > 0:
-		# 	self.p2 = Thread(target=self.create_cold_set, args=(self.exit_event, cold_set_size,))
-		# 	self.p2.start()
 
 	def deconstruct(self):
 		print("[autoscaler] deconstructing")
 		self.exit_event.set()
 		self.p1.join()
-		# if self.cold_set_size > 0:
-		# 	self.p2.join()
 
 	def update_tokens_per_second(self, instance): #need lock here?
 		port_num = str(instance["ssh_port"])
@@ -179,10 +172,10 @@ class InstanceSet:
 			return
 
 		if init:
-			for instance in curr_instances: #could parallelize
+			for instance in curr_instances: #could parallelize with act_on_instances
 				self.read_instance_json(instance)
 
-		hot_instances = []
+		running_instances = []
 		cold_instances = []
 		loading_instances = []
 
@@ -194,7 +187,7 @@ class InstanceSet:
 			if (instance['actual_status'] == 'offline') or (instance['status_msg'] is not None and 'Error response from daemon' in instance['status_msg']) or (instance['machine_id'] in BAD_MACHINE_IDS):
 				self.bad_instance_ids.append(instance['id'])
 			elif instance['actual_status'] == 'running':
-				hot_instances.append(instance)
+				running_instances.append(instance)
 			elif instance['actual_status'] == 'loading' or instance['actual_status'] == None or (instance['actual_status'] == 'created' and instance['intended_status'] == 'running'):
 				loading_instances.append(instance)
 			elif (instance['actual_status'] == 'created' and instance['intended_status'] == 'stopped') or instance['actual_status'] == 'stopping' or instance['actual_status'] == 'exited':
@@ -202,16 +195,16 @@ class InstanceSet:
 			else:
 				print("[autoscaler] instance id: {} has unidentified status: {}".format(instance['id'], instance['actual_status']))
 
-		hot_instances.sort(key=tps, reverse=True)
+		running_instances.sort(key=tps, reverse=True)
 		cold_instances.sort(key=tps, reverse=True)
 
 		self.lock.acquire()
-		self.hot_instances = hot_instances
+		self.running_instances = running_instances
 		self.cold_instances = cold_instances
 		self.loading_instances = loading_instances
 		self.lock.release()
 
-		self.update_ready_instances()
+		self.update_hot_instances()
 
 	# def check_server_error(self, instance): #will hang, might need to find a faster way to do this
 	# 	port_num = str(instance["ssh_port"])
@@ -226,8 +219,8 @@ class InstanceSet:
 	# def find_error_instances(self):
 	# 	self.lock.acquire()
 
-	# 	loaded_but_not_hot = [inst for inst in self.hot_instances if inst not in self.ready_instances]
-	# 	# loaded_but_not_hot = [self.hot_instances[0]] if len(self.hot_instances) != 0 else []
+	# 	loaded_but_not_hot = [inst for inst in self.running_instances if inst not in self.hot_instances]
+	# 	# loaded_but_not_hot = [self.running_instances[0]] if len(self.running_instances) != 0 else []
 	# 	if len(loaded_but_not_hot) == 0:
 	# 		self.lock.release()
 	# 		return
@@ -250,78 +243,71 @@ class InstanceSet:
 	# 	result = subprocess.run([ssh_string + command_string1], shell=True, capture_output=True)
 	# 	result = subprocess.run([ssh_string + command_string2], shell=True, capture_output=True)
 
-	def check_server_ready(self, instance): #could get notified by the server directly in the future
+	def check_server_hot(self, instance): #could get notified by the server directly in the future
 		port_num = str(instance["ssh_port"])
 		host = instance["ssh_host"]
 		key_file = "/Users/nicholasgreenspan/Desktop/VastAI/ssh/vast-2" #need a better way to track this
 		ssh_string = f"ssh -i {key_file} -p {port_num} -o StrictHostKeyChecking=no root@{host}"
-		ready_str = "Serving Flask app 'model_inference_server'"
-		command_string = f"grep '{ready_str}' /src/infer.log | tail -n 1"
+		hot_str = "# GPU blocks:"
+		command_string = f"grep '{hot_str}' /src/infer.log | tail -n 1"
 		result = subprocess.run([ssh_string + " " + command_string], shell=True, capture_output=True)
-		print(f"ready result: {result}")
 		out = result.stdout
-		if out is not None and ready_str in out.decode('utf-8'):
+		if out is not None and hot_str in out.decode('utf-8'):
 			return True
 		else:
 			return False
 
-	#need to change for the streaming case
-	def test_ready_instance(self, instance, token):
-		addr = get_address(instance)
+	def test_hot_instance(self, instance, token):
+		addr = get_model_address(instance, self.streaming)
 		if self.streaming:
 			return send_vllm_request_streaming_test_auth(addr, token)
 
-		print(f"sending to instance: {instance["id"]}")
+		print(f"[autoscaler] sending to instance: {instance['id']}")
 		response = send_vllm_request_auth(addr, token, TEST_PROMPT)
-		print(f"got response from instance: {instance["id"]}")
+		print(f"[autoscaler] got response from instance: {instance['id']}")
 		if response["reply"] is not None:
 			if response["num_tokens"] != 0:
 				return True
 		return False
 
-	def update_ready_instances(self):
+	def update_hot_instances(self):
 		self.lock.acquire()
+		running_instances = self.running_instances
 		hot_instances = self.hot_instances
-		ready_instances = self.ready_instances
 		instance_info_map = self.instance_info_map
 		self.lock.release()
 
-		if len(hot_instances) == 0:
+		if len(running_instances) == 0:
 			return
 
-		hot_but_not_ready = [i for i in hot_instances if ((i not in ready_instances) and (i["id"] not in self.ignore_instance_ids))]
-		new_ready_instances = []
+		running_but_not_hot = [i for i in running_instances if ((i not in hot_instances) and (i["id"] not in self.ignore_instance_ids))]
+		new_hot_instances = []
 		with ThreadPoolExecutor(MAX_CONCURRENCY) as e:
-			for instance, result in zip(hot_but_not_ready, e.map(self.check_server_ready, hot_but_not_ready)):
+			for instance, result in zip(running_but_not_hot, e.map(self.check_server_hot, running_but_not_hot)):
 				if result:
-					new_ready_instances.append(instance)
-		print(f"[autoscaler] initial num ready before testing: {len(new_ready_instances)}")
-		new_ready_instances_tested = []
-		new_ready_tokens = [instance_info_map[instance["id"]]["mtoken"] for instance in new_ready_instances]
+					new_hot_instances.append(instance)
+		print(f"[autoscaler] initial num hot before testing: {len(new_hot_instances)}")
+		new_hot_instances_tested = []
+		new_hot_tokens = [instance_info_map[instance["id"]]["mtoken"] for instance in new_hot_instances]
 		with ThreadPoolExecutor(MAX_CONCURRENCY) as e:
-			for instance, result in zip(new_ready_instances, e.map(self.test_ready_instance, new_ready_instances, new_ready_tokens)):
+			for instance, result in zip(new_hot_instances, e.map(self.test_hot_instance, new_hot_instances, new_hot_tokens)):
 				if result:
-					new_ready_instances_tested.append(instance)
+					new_hot_instances_tested.append(instance)
 
-		print(f"[autoscaler] num ready after testing: {len(new_ready_instances_tested)}")
-		next_ready_instances = [i for i in hot_instances if ((i in ready_instances) or (i in new_ready_instances_tested))] #gets rid of old ready instances that are no longer hot
+		print(f"[autoscaler] num hot after testing: {len(new_hot_instances_tested)}")
+		next_hot_instances = [i for i in running_instances if ((i in hot_instances) or (i in new_hot_instances_tested))] #gets rid of old hot instances that are no longer running
 
-		# if len(self.ready_instances) != 0:
-		# 	with ThreadPoolExecutor(len(self.ready_instances)) as e:
-		# 		# e.map(self.update_tokens_per_second, self.ready_instances)
-		# 		e.map(self.zero_ready_log, self.ready_instances)
+		# if len(self.hot_instances) != 0:
+		# 	with ThreadPoolExecutor(len(self.hot_instances)) as e:
+		# 		# e.map(self.update_tokens_per_second, self.hot_instances)
+		# 		e.map(self.zero_ready_log, self.hot_instances)
 
-		for instance in next_ready_instances:
+		for instance in next_hot_instances:
 			instance["mtoken"] = instance_info_map[instance["id"]]["mtoken"]
 
 		self.lock.acquire()
-		self.ready_instances = next_ready_instances
+		self.hot_instances = next_hot_instances
 		self.lock.release()
-
-	# def manage_join(self):
-	# 	for t in self.manage_threads:
-	# 		t.join()
-	# 	self.manage_threads = []
 
 	def manage_instances(self):
 		self.lock.acquire()
@@ -337,7 +323,7 @@ class InstanceSet:
 		self.strat.avg_num_busy = num_hot_busy
 
 		num_hot = self.num_hot
-		num_model_loading = len(self.hot_instances) - num_hot
+		num_model_loading = len(self.running_instances) - num_hot
 		num_loading = len(self.loading_instances) + num_model_loading
 
 		num_cold = len(self.cold_instances) + num_loading
@@ -350,7 +336,7 @@ class InstanceSet:
 		self.strat.avg_num_hot = num_hot_rolling
 		hot_ratio_rolling = (num_hot_rolling + 1) / (num_tot + 0.1)
 
-		print(f"[autoscaler] internal lists: len(self.hot_instances): {len(self.hot_instances)}, len(self.ready_instances): {len(self.ready_instances)}")
+		print(f"[autoscaler] internal lists: len(self.running_instances): {len(self.running_instances)}, len(self.hot_instances): {len(self.hot_instances)}")
 		print("[autoscaler] managing instances: hot_busy_ratio: {}, hot_ratio: {}, hot_ratio_rolling: {}, num_hot: {}, num_busy: {}, num_cold_ready: {}, num_loading: {}, num_total: {}".format(hot_busy_ratio, hot_ratio, hot_ratio_rolling, num_hot, num_hot_busy, len(self.cold_instances), num_loading, num_tot))
 
 		if self.manage:
@@ -359,8 +345,8 @@ class InstanceSet:
 				print("[autoscaler] hot busy ratio too low!")
 				count = num_hot - int((hot_busy_ratio / self.strat.target_hot_busy_ratio_lower) * max(num_hot, 1))
 				#maybe I can filter for idle here
-				hot_instances = self.hot_instances[::-1]
-				stop_thread = Thread(target=self.act_on_instances, args=(self.stop_instance, count, hot_instances))
+				running_instances = self.running_instances[::-1]
+				stop_thread = Thread(target=self.act_on_instances, args=(self.stop_instance, count, running_instances))
 				stop_thread.start()
 				stop_thread.join()
 
@@ -413,15 +399,6 @@ class InstanceSet:
 				ask_list += json.loads(listed_instances)
 
 		return ask_list
-
-	# def create_cold_set(self, event, num_instances):
-	# 	self.create_instances(num_instances, model="vllm-13")
-	# 	while not event.is_set():
-	# 		for ready_instance in self.ready_instances:
-	# 			self.stop_instance(ready_instance['id'])
-	# 			print(f"[autoscaler] id: {ready_instance['id']} is now ready and cold")
-	# 		time.sleep(TIME_INTERVAL_SECONDS)
-	# 	print("[autoscaler] done creating cold set")
 
 	def create_instances(self, num_instances):
 		ask_list = self.get_asks()
@@ -477,7 +454,11 @@ class InstanceSet:
 		num_gpus = instance["num_gpus"]
 		config = self.instance_config[model]["create"]
 		mtoken = secrets.token_hex(32)
-		args = f" --onstart {config['onstart']} --image {config['image']} --disk {config['disk']} --env '-e MASTER_TOKEN={mtoken} -e NUM_GPUS={num_gpus} {config['env']}'" # --ssh --direct
+		if self.streaming:
+			onstart = f"{config['onstart']}_streaming.sh"
+		else:
+			onstart = f"{config['onstart']}.sh"
+		args = f" --onstart {onstart} --image {config['image']} --disk {config['disk']} --env '-e MASTER_TOKEN={mtoken} -e NUM_GPUS={num_gpus} {config['env']}'" # --ssh --direct
 		result = subprocess.run([f"vastai create instance {str(instance_id)}" + args + " --raw"], shell=True, capture_output=True)
 		print(result)
 		if result is not None and result.stdout.decode('utf-8') is not None:
@@ -502,11 +483,11 @@ class InstanceSet:
 		return True
 
 	def destroy_all_instances(self):
-		all = self.hot_instances + self.cold_instances + self.loading_instances
+		all = self.running_instances + self.cold_instances + self.loading_instances
 		self.act_on_instances(self.destroy_instance, len(all), all)
 
 	def stop_all_instances(self):
-		all = self.hot_instances + self.loading_instances
+		all = self.running_instances + self.loading_instances
 		self.act_on_instances(self.stop_instance, len(all), all)
 
 	def print_instance_ids(self, label, instances):

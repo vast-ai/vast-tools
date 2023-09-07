@@ -11,19 +11,21 @@ class InstanceClient:
         self.monitor_token_queue()
 
     def monitor_token_queue(self):
+        print(f"[instance_client] monitoring token queue with size : {self.token_queue.qsize()}")
         if self.token_queue.qsize() < 100:
             new_tokens = self.get_tokens()
             for t in new_tokens:
                 self.token_queue.put(t)
+            print(f"[instance_client] new tokens returned, now token queue with size : {self.token_queue.qsize()}")
 
     def get_tokens(self):
-        print(f"[instance_client] getting tokens for instance: {self.instance_id}")
+        # print(f"[instance_client] getting tokens for instance: {self.instance_id}")
         URI = f'http://{self.instance_addr}/tokens'
         request_dict = {"mtoken" : self.mtoken}
         t1 = time.time()
         response = requests.get(URI, json=request_dict)
         t2 = time.time()
-        print(f"[instance_client] got tokens in {t2 - t1} and status code is {response.status_code}")
+        # print(f"[instance_client] got tokens in {t2 - t1} and status code is {response.status_code}")
         if response.status_code == 200:
             return response.json()["tokens"]
 

@@ -6,8 +6,7 @@ import subprocess
 import json
 import os
 
-from autoscaler import get_curr_instances
-from loadbalancer import get_address
+from autoscaler import get_curr_instances, get_model_address
 from prompt_OOBA import send_vllm_request, send_vllm_request_auth, send_vllm_request_streaming, send_vllm_request_streaming_auth
 
 WAIT_INTERVAL = 5
@@ -82,7 +81,7 @@ class ClientMetrics:
 		for instance in instances:
 			if "ports" not in instance.keys():
 				continue
-			if get_address(instance) in self.machine_stats_dict.keys():
+			if get_model_address(instance, self.streaming) in self.machine_stats_dict.keys():
 				dph += instance["dph_base"]
 		self.total_cost = (self.get_time_elapsed() / (60 * 60)) * dph
 

@@ -21,11 +21,11 @@ class Client:
 		else:
 			print("[as-client] autoscaler server shut-down failed")
 
-	def get_ready_instances(self):
-		URI = f'http://{self.auto_server_addr}/ready'
+	def get_hot_instances(self):
+		URI = f'http://{self.auto_server_addr}/hot'
 		response = requests.get(URI)
 		if response.status_code == 200:
-			return response.json()['ready_instances']
+			return response.json()['hot_instances']
 
 	def report_hot_busy(self, num_hot, num_busy):
 		URI = f'http://{self.auto_server_addr}/report'
