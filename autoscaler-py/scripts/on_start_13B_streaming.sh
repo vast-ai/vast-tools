@@ -10,4 +10,4 @@ then
     /scripts/docker-entrypoint.sh python3 /app/download-model.py meta-llama/Llama-2-13b-hf;
 fi
 touch /root/hasbooted
-python3 /src/host-server/auth_server_streaming > infer.log 2>&1 &
+python3 /src/host-server/auth_server_streaming.py > infer.log 2>&1 &
