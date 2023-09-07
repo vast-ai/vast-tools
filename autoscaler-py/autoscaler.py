@@ -248,9 +248,10 @@ class InstanceSet:
 		host = instance["ssh_host"]
 		key_file = "/Users/nicholasgreenspan/Desktop/VastAI/ssh/vast-2" #need a better way to track this
 		ssh_string = f"ssh -i {key_file} -p {port_num} -o StrictHostKeyChecking=no root@{host}"
-		hot_str = "# GPU blocks:"
+		hot_str = "# GPU blocks:" #test this
 		command_string = f"grep '{hot_str}' /src/infer.log | tail -n 1"
 		result = subprocess.run([ssh_string + " " + command_string], shell=True, capture_output=True)
+		print(result)
 		out = result.stdout
 		if out is not None and hot_str in out.decode('utf-8'):
 			return True
