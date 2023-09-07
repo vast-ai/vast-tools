@@ -104,7 +104,10 @@ class LoadBalancer:
 			addr = get_model_address(hot_server, self.streaming)
 			token_queue = self.instance_clients[hot_server["id"]].token_queue
 			token = token_queue.get()
-			tps = DEFAULT_TPS
+			if "tokens/s" in hot_server.key():
+				tps = hot_server["tokens/s"]
+			else:
+				tps = DEFAULT_TPS
 			self.queue_duration[hot_server["id"]] += ((1 / tps) * num_tokens)
 			self.hot_queue.put((self.queue_duration[hot_server["id"]], hot_server["id"], hot_server))
 		return addr, token

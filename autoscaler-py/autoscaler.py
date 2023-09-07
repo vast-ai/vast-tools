@@ -130,23 +130,23 @@ class InstanceSet:
 		self.exit_event.set()
 		self.p1.join()
 
-	def update_tokens_per_second(self, instance): #need lock here?
-		port_num = str(instance["ssh_port"])
-		host = instance["ssh_host"]
-		result = subprocess.run(["ssh", "-p", port_num, "-o", "StrictHostKeyChecking=no", "root@{}".format(host), "grep 'Output generated' /app/onstart.log | tail -n 1"], capture_output=True)
-		out = result.stdout
-		tps = None
-		if out is not None:
-			line = out.decode('utf-8')
-			pattern = r"()\d+\.\d+(?=\stokens\/s)"
-			match = re.search(pattern, line)
-			if match is not None:
-				tps = float(match.group())
+	# def update_tokens_per_second(self, instance): #need lock here?
+	# 	port_num = str(instance["ssh_port"])
+	# 	host = instance["ssh_host"]
+	# 	result = subprocess.run(["ssh", "-p", port_num, "-o", "StrictHostKeyChecking=no", "root@{}".format(host), "grep 'Output generated' /app/onstart.log | tail -n 1"], capture_output=True)
+	# 	out = result.stdout
+	# 	tps = None
+	# 	if out is not None:
+	# 		line = out.decode('utf-8')
+	# 		pattern = r"()\d+\.\d+(?=\stokens\/s)"
+	# 		match = re.search(pattern, line)
+	# 		if match is not None:
+	# 			tps = float(match.group())
 
-		# if tps is not None:
-		# 	instance["tokens/s"] = tps
-		# 	with open(f"instance_info/{instance['machine_id']}.json", "w") as f:
-		# 		json.dump(instance, f)
+	# 	# if tps is not None:
+	# 	# 	instance["tokens/s"] = tps
+	# 	# 	with open(f"instance_info/{instance['machine_id']}.json", "w") as f:
+	# 	# 		json.dump(instance, f)
 
 	def update_and_manage_background(self, event):
 		while not event.is_set():
@@ -175,6 +175,7 @@ class InstanceSet:
 			for instance in curr_instances: #could parallelize with act_on_instances
 				self.read_instance_json(instance)
 
+		hot_instances = []
 		running_instances = []
 		cold_instances = []
 		loading_instances = []
@@ -189,6 +190,11 @@ class InstanceSet:
 			if (instance['actual_status'] == 'offline') or (instance['status_msg'] is not None and 'Error response from daemon' in instance['status_msg']) or (instance['machine_id'] in BAD_MACHINE_IDS):
 				self.bad_instance_ids.append(instance['id'])
 			elif instance['actual_status'] == 'running':
+				if self.instance_info_map[instance['id']]['model_loaded']:
+					instance["mtoken"] = self.instance_info_map[instance["id"]]["mtoken"] #for use by loadbalancer
+					instance["tokens/s"] = self.instance_info_map[instance["id"]]["tokens/s"]
+					hot_instances.append(instance)
+				
 				running_instances.append(instance)
 			elif instance['actual_status'] == 'loading' or instance['actual_status'] == None or (instance['actual_status'] == 'created' and instance['intended_status'] == 'running'):
 				loading_instances.append(instance)
@@ -201,117 +207,51 @@ class InstanceSet:
 		cold_instances.sort(key=tps, reverse=True)
 
 		self.lock.acquire()
+		self.hot_instances = hot_instances
 		self.running_instances = running_instances
 		self.cold_instances = cold_instances
 		self.loading_instances = loading_instances
 		self.lock.release()
 
-		self.update_hot_instances()
+		# self.update_hot_instances()
 
-	# def check_server_error(self, instance): #will hang, might need to find a faster way to do this
-	# 	port_num = str(instance["ssh_port"])
-	# 	host = instance["ssh_host"]
-	# 	result = subprocess.run([f"ssh -p {port_num} -o StrictHostKeyChecking=no root@{host} grep -E '{ERROR_STRINGS[0]}|{ERROR_STRINGS[1]}' /app/onstart.log"], shell=True, capture_output=True)
-	# 	out = result.stdout
-	# 	if out is not None and ((ERROR_STRINGS[0] in out.decode('utf-8')) or (ERROR_STRINGS[1] in out.decode('utf-8'))):
-	# 		return True
-	# 	else:
-	# 		return False
+	# def test_hot_instance(self, instance, token):
+	# 	addr = get_model_address(instance, self.streaming)
+	# 	if self.streaming:
+	# 		return send_vllm_request_streaming_test_auth(addr, token)
 
-	# def find_error_instances(self):
+	# 	print(f"[autoscaler] sending to instance: {instance['id']}")
+	# 	response = send_vllm_request_auth(addr, token, TEST_PROMPT)
+	# 	print(f"[autoscaler] got response from instance: {instance['id']}")
+	# 	if response["reply"] is not None:
+	# 		if response["num_tokens"] != 0:
+	# 			return True
+	# 	return False
+
+	# def update_hot_instances(self):
 	# 	self.lock.acquire()
-
-	# 	loaded_but_not_hot = [inst for inst in self.running_instances if inst not in self.hot_instances]
-	# 	# loaded_but_not_hot = [self.running_instances[0]] if len(self.running_instances) != 0 else []
-	# 	if len(loaded_but_not_hot) == 0:
-	# 		self.lock.release()
-	# 		return
-
-	# 	error_instance_ids = []
-	# 	with ThreadPoolExecutor(MAX_CONCURRENCY) as e:
-	# 		for instance, result in zip(loaded_but_not_hot, e.map(self.check_server_error, loaded_but_not_hot)):
-	# 			if result:
-	# 				error_instance_ids.append(instance["id"])
-
+	# 	running_instances = self.running_instances
+	# 	hot_instances = self.hot_instances
+	# 	instance_info_map = self.instance_info_map
 	# 	self.lock.release()
-	# 	return error_instance_ids
 
-	# def zero_ready_log(self, instance):
-	# 	port_num = str(instance["ssh_port"])
-	# 	host = instance["ssh_host"]
-	# 	ssh_string = f"ssh -p {port_num} -o StrictHostKeyChecking=no root@{host}"
-	# 	command_string1 = f"cp /app/onstart.log /app/onstart_og.log"
-	# 	command_string2 = f"echo -n '' > /app/onstart.log"
-	# 	result = subprocess.run([ssh_string + command_string1], shell=True, capture_output=True)
-	# 	result = subprocess.run([ssh_string + command_string2], shell=True, capture_output=True)
+	# 	print(f"[autoscaler] initial num hot before testing: {len(new_hot_instances)}")
+	# 	new_hot_instances_tested = []
+	# 	new_hot_tokens = [instance_info_map[instance["id"]]["mtoken"] for instance in new_hot_instances]
+	# 	with ThreadPoolExecutor(MAX_CONCURRENCY) as e:
+	# 		for instance, result in zip(new_hot_instances, e.map(self.test_hot_instance, new_hot_instances, new_hot_tokens)):
+	# 			if result:
+	# 				new_hot_instances_tested.append(instance)
 
-	def check_server_hot(self, instance): #could get notified by the server directly in the future
-		port_num = str(instance["ssh_port"])
-		host = instance["ssh_host"]
-		key_file = "/home/nicholas/Desktop/VastAI/ssh/vast-2" #not necessary if shell=True
-		ssh_string = f"ssh -i {key_file} -p {port_num} -o StrictHostKeyChecking=no root@{host}"
-		hot_str = "blocks"
-		command_string = f"grep '{hot_str}' /src/infer.log | tail -n 1"
-		result = subprocess.run([ssh_string + " " + command_string], shell=True, capture_output=True)
-		# print(result)
-		out = result.stdout
-		# print(out)
-		if out is not None and hot_str in out.decode('utf-8'):
-			return True
-		else:
-			return False
+	# 	print(f"[autoscaler] num hot after testing: {len(new_hot_instances_tested)}")
+	# 	next_hot_instances = [i for i in running_instances if ((i in hot_instances) or (i in new_hot_instances_tested))] #gets rid of old hot instances that are no longer running
 
-	def test_hot_instance(self, instance, token):
-		addr = get_model_address(instance, self.streaming)
-		if self.streaming:
-			return send_vllm_request_streaming_test_auth(addr, token)
+	# 	for instance in next_hot_instances:
+	# 		instance["mtoken"] = instance_info_map[instance["id"]]["mtoken"]
 
-		print(f"[autoscaler] sending to instance: {instance['id']}")
-		response = send_vllm_request_auth(addr, token, TEST_PROMPT)
-		print(f"[autoscaler] got response from instance: {instance['id']}")
-		if response["reply"] is not None:
-			if response["num_tokens"] != 0:
-				return True
-		return False
-
-	def update_hot_instances(self):
-		self.lock.acquire()
-		running_instances = self.running_instances
-		hot_instances = self.hot_instances
-		instance_info_map = self.instance_info_map
-		self.lock.release()
-
-		if len(running_instances) == 0:
-			return
-
-		running_but_not_hot = [i for i in running_instances if ((i not in hot_instances))] # and (i["id"] not in self.ignore_instance_ids)
-		new_hot_instances = []
-		with ThreadPoolExecutor(MAX_CONCURRENCY) as e:
-			for instance, result in zip(running_but_not_hot, e.map(self.check_server_hot, running_but_not_hot)):
-				if result:
-					new_hot_instances.append(instance)
-		print(f"[autoscaler] initial num hot before testing: {len(new_hot_instances)}")
-		new_hot_instances_tested = []
-		new_hot_tokens = [instance_info_map[instance["id"]]["mtoken"] for instance in new_hot_instances]
-		with ThreadPoolExecutor(MAX_CONCURRENCY) as e:
-			for instance, result in zip(new_hot_instances, e.map(self.test_hot_instance, new_hot_instances, new_hot_tokens)):
-				if result:
-					new_hot_instances_tested.append(instance)
-
-		print(f"[autoscaler] num hot after testing: {len(new_hot_instances_tested)}")
-		next_hot_instances = [i for i in running_instances if ((i in hot_instances) or (i in new_hot_instances_tested))] #gets rid of old hot instances that are no longer running
-
-		# if len(self.hot_instances) != 0:
-		# 	with ThreadPoolExecutor(len(self.hot_instances)) as e:
-		# 		# e.map(self.update_tokens_per_second, self.hot_instances)
-		# 		e.map(self.zero_ready_log, self.hot_instances)
-
-		for instance in next_hot_instances:
-			instance["mtoken"] = instance_info_map[instance["id"]]["mtoken"]
-
-		self.lock.acquire()
-		self.hot_instances = next_hot_instances
-		self.lock.release()
+	# 	self.lock.acquire()
+	# 	self.hot_instances = next_hot_instances
+	# 	self.lock.release()
 
 	def manage_instances(self):
 		self.lock.acquire()
@@ -470,7 +410,7 @@ class InstanceSet:
 				response = json.loads(result.stdout.decode('utf-8'))
 				if response["success"]:
 					new_id = response["new_contract"]
-					init_json = {"mtoken" : mtoken, "model_loaded" : None, "tps" : None}
+					init_json = {"mtoken" : mtoken, "model_loaded" : False, "tokens/s" : None, "tokens" : 0, "error" : False}
 					self.instance_info_map[new_id] = init_json
 					with open(f"instance_info/{new_id}.json", "w") as f:
 						json.dump(init_json, f)

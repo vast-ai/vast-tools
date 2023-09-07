@@ -62,6 +62,25 @@ def get_server_status():
     autoscaler.lock.release()
     return status
 
+
+@app.route('/instance_report', methods=['POST'])
+def gpu_report_hot():
+    global autoscaler
+    data = request.json
+    instance_id = data["id"]
+
+    # need locks here?
+    model_info = autoscaler.instance_info_map[instance_id]
+    if not(model_info["model_loaded"]) and "loadtime" in data.keys():
+        model_info["model_loaded"] = True
+        model_info["loadtime"] = data["loadtime"]
+
+    if "tokens" in data.keys():
+        model_info["tokens"] += data["tokens"]
+        model_info["tokens/s"] = data["tokens/s"]
+
+    return "Updated model info"
+
 if __name__ == '__main__':
     app.run(threaded=False, port=8000) #think about how to support multi-threading safety
 
