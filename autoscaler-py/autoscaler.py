@@ -14,7 +14,7 @@ MAX_COST_PER_HOUR = 10.0
 MAX_CONCURRENCY = 100
 MAX_ACTIONS = 3
 INSTANCE_CONFIG_NAME = "configs/OOBA_configs.json"
-IGNORE_INSTANCE_IDS = [6899196, 6897883]
+IGNORE_INSTANCE_IDS = [6924410, 6924411, 6925426, 6925427] # 6924389, 6924390, 6924720
 BAD_MACHINE_IDS = [4424]
 ERROR_STRINGS = ["safetensors_rust.SafetensorError", "RuntimeError", "Error: remote port forwarding failed"]
 TEST_PROMPT = "What?"
@@ -180,6 +180,8 @@ class InstanceSet:
 		loading_instances = []
 
 		for instance in curr_instances:
+			if instance["id"] in self.ignore_instance_ids:
+				continue
 			if instance["id"] not in self.instance_info_map.keys():
 				if not (self.read_instance_json(instance)):
 					self.bad_instance_ids.append(instance['id'])
@@ -246,13 +248,14 @@ class InstanceSet:
 	def check_server_hot(self, instance): #could get notified by the server directly in the future
 		port_num = str(instance["ssh_port"])
 		host = instance["ssh_host"]
-		key_file = "/Users/nicholasgreenspan/Desktop/VastAI/ssh/vast-2" #need a better way to track this
+		key_file = "/home/nicholas/Desktop/VastAI/ssh/vast-2" #not necessary if shell=True
 		ssh_string = f"ssh -i {key_file} -p {port_num} -o StrictHostKeyChecking=no root@{host}"
-		hot_str = "# GPU blocks:" #test this
+		hot_str = "blocks"
 		command_string = f"grep '{hot_str}' /src/infer.log | tail -n 1"
 		result = subprocess.run([ssh_string + " " + command_string], shell=True, capture_output=True)
-		print(result)
+		# print(result)
 		out = result.stdout
+		# print(out)
 		if out is not None and hot_str in out.decode('utf-8'):
 			return True
 		else:
@@ -281,7 +284,7 @@ class InstanceSet:
 		if len(running_instances) == 0:
 			return
 
-		running_but_not_hot = [i for i in running_instances if ((i not in hot_instances) and (i["id"] not in self.ignore_instance_ids))]
+		running_but_not_hot = [i for i in running_instances if ((i not in hot_instances))] # and (i["id"] not in self.ignore_instance_ids)
 		new_hot_instances = []
 		with ThreadPoolExecutor(MAX_CONCURRENCY) as e:
 			for instance, result in zip(running_but_not_hot, e.map(self.check_server_hot, running_but_not_hot)):

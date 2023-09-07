@@ -11,4 +11,4 @@ then
 fi
 touch /root/hasbooted
 python3 /src/host-server/auth_server.py > auth.log 2>&1 &
-python3 /src/host-server/model_inference_server.py > infer.log 2>&1 &
+python3 /src/host-server/inference_server.py > infer.log 2>&1 &

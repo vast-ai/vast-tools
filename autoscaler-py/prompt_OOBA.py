@@ -129,7 +129,7 @@ def send_vllm_request_streaming_test(gpu_server_addr):
 		websocket.send("Hello?")
 		for message in websocket:
 			response += message
-	print(response)
+	# print(response)
 	if response != "":
 		return True
 	else:
@@ -144,7 +144,7 @@ def send_vllm_request_streaming_test_auth(gpu_server_addr, mtoken):
 		websocket.send(MSG_END)
 		for message in websocket:
 			response += message
-	print(response)
+	# print(response)
 	if response != "":
 		return True
 	else:

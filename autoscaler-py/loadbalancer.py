@@ -98,6 +98,7 @@ class LoadBalancer:
 
 	def get_next_addr(self, num_tokens):
 		addr = None
+		token = None
 		if not(self.hot_queue.empty()):
 			(work_time, _, hot_server) = self.hot_queue.get()
 			addr = get_model_address(hot_server, self.streaming)
