@@ -62,10 +62,6 @@ def get_server_status():
     autoscaler.lock.release()
     return status
 
-@app.route('/gpu_report_hot', methods=['POST'])
-def gpu_report_hot():
-    pass
-
 if __name__ == '__main__':
     app.run(threaded=False, port=8000) #think about how to support multi-threading safety
 

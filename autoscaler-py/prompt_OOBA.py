@@ -42,25 +42,6 @@ ooba_dict = {
 	'stopping_strings': []
 	}
 
-def send_vllm_request(gpu_server_addr, text_prompt):
-	URI = f'http://{gpu_server_addr}/generate'
-	request_dict = {"prompt" : text_prompt}
-	text_result = None
-	error = None
-	num_tokens = None
-	try:
-		response = requests.post(URI, json=request_dict)
-		if response.status_code == 200:
-			reply = response.json()
-			if reply["error"] is None:
-				text_result = f"{text_prompt} -> {reply['response']}"
-				num_tokens = reply["num_tokens"]
-			else:
-				error = reply['error']
-	except requests.exceptions.ConnectionError as e:
-		error = f"connection error: {e}"
-
-	return {"reply" : text_result, "error": error, "num_tokens" : num_tokens}
 
 def send_vllm_request_auth(gpu_server_addr, id_token, text_prompt):
 	URI = f'http://{gpu_server_addr}/auth'
@@ -88,21 +69,6 @@ def send_vllm_request_auth(gpu_server_addr, id_token, text_prompt):
 
 	return {"reply" : text_result, "error": error, "num_tokens" : num_tokens, "first_msg_wait" : None}
 
-def send_vllm_request_streaming(gpu_server_addr, id_token, text_prompt):
-	response = ""
-	first_msg_wait = 0.0
-	first = True
-	with connect(f"ws://{gpu_server_addr}/") as websocket:
-		t1 = time.time()
-		websocket.send(text_prompt + "?")
-		for message in websocket:
-			if first:
-				t2 = time.time()
-				first_msg_wait = t2 - t1
-				first = False
-			response += message
-	return {"reply" : response, "error" : None, "num_tokens" : 50, "first_msg_wait" : first_msg_wait}
-
 def send_vllm_request_streaming_auth(gpu_server_addr, id_token, text_prompt):
 	response = ""
 	first_msg_wait = 0.0
@@ -123,27 +89,20 @@ def send_vllm_request_streaming_auth(gpu_server_addr, id_token, text_prompt):
 			response += message
 	return {"reply" : response, "error" : None, "num_tokens" : 50, "first_msg_wait" : first_msg_wait}
 
-def send_vllm_request_streaming_test(gpu_server_addr):
-	response = ""
-	with connect(f"ws://{gpu_server_addr}/") as websocket:
-		websocket.send("Hello?")
-		for message in websocket:
-			response += message
-	# print(response)
-	if response != "":
-		return True
-	else:
-		return False
 
 def send_vllm_request_streaming_test_auth(gpu_server_addr, mtoken):
 	response = ""
-	with connect(f"ws://{gpu_server_addr}/") as websocket:
-		websocket.send(mtoken)
-		websocket.send(MSG_END)
-		websocket.send("Hello?")
-		websocket.send(MSG_END)
-		for message in websocket:
-			response += message
+	try:
+		with connect(f"ws://{gpu_server_addr}/") as websocket:
+			websocket.send(mtoken)
+			websocket.send(MSG_END)
+			websocket.send("Hello?")
+			websocket.send(MSG_END)
+			for message in websocket:
+				response += message
+	except TimeoutError:
+		pass
+	
 	# print(response)
 	if response != "":
 		return True

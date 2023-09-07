@@ -7,7 +7,7 @@ import json
 import os
 
 from autoscaler import get_curr_instances, get_model_address
-from prompt_OOBA import send_vllm_request, send_vllm_request_auth, send_vllm_request_streaming, send_vllm_request_streaming_auth
+from prompt_OOBA import send_vllm_request_auth, send_vllm_request_streaming_auth
 
 WAIT_INTERVAL = 5
 

@@ -7,14 +7,14 @@ import json
 import secrets
 import os
 from ratio_manager import update_rolling_average
-from prompt_OOBA import send_vllm_request_auth, send_vllm_request_streaming_test, send_vllm_request_streaming_test_auth
+from prompt_OOBA import send_vllm_request_auth, send_vllm_request_streaming_test_auth
 
 TIME_INTERVAL_SECONDS = 5
 MAX_COST_PER_HOUR = 10.0
 MAX_CONCURRENCY = 100
 MAX_ACTIONS = 3
 INSTANCE_CONFIG_NAME = "configs/OOBA_configs.json"
-IGNORE_INSTANCE_IDS = [6924410, 6924411, 6925426, 6925427] # 6924389, 6924390, 6924720
+IGNORE_INSTANCE_IDS = [6924410, 6924411, 6925426, 6924389, 6924390, 6924720] # 6925427
 BAD_MACHINE_IDS = [4424]
 ERROR_STRINGS = ["safetensors_rust.SafetensorError", "RuntimeError", "Error: remote port forwarding failed"]
 TEST_PROMPT = "What?"
