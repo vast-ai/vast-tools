@@ -1,6 +1,9 @@
 from flask import Flask, request
 from autoscaler import InstanceSet
 import logging
+import subprocess
+import re
+import time
 
 app = Flask(__name__)
 
@@ -9,11 +12,22 @@ log.setLevel(logging.ERROR)
 
 autoscaler = None
 
+def get_cloudflared_link():
+    process = subprocess.Popen([f"cloudflared tunnel --url http://localhost:8000"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+    http_pattern = r'https://[a-zA-Z0-9-]+\.trycloudflare\.com'
+    for line in process.stderr:
+        http_match = re.search(http_pattern, line)
+        if http_match:
+            return http_match.group()
+
 @app.route("/setup", methods=['POST'])
 def setup_autoscaler():
     global autoscaler
     data = request.json
-    autoscaler = InstanceSet(**data["args"])
+    print("getting link")
+    cloudflare_addr=get_cloudflared_link()
+    print(f"got link: {cloudflare_addr}")
+    autoscaler = InstanceSet(**data["args"], cloudflare_addr=cloudflare_addr)
     return "Started InstanceSet"
 
 @app.route("/destroy", methods=['POST'])
@@ -62,22 +76,27 @@ def get_server_status():
     autoscaler.lock.release()
     return status
 
-
-@app.route('/instance_report', methods=['POST'])
+@app.route('/gpureport', methods=['POST'])
 def gpu_report_hot():
     global autoscaler
     data = request.json
     instance_id = data["id"]
+    print(f"[autoscaler_server] recieved message from id: {instance_id}")
 
     # need locks here?
     model_info = autoscaler.instance_info_map[instance_id]
-    if not(model_info["model_loaded"]) and "loadtime" in data.keys():
+    if not(model_info["model_loaded"]) and "loaded" in data.keys() and data["loaded"]:
         model_info["model_loaded"] = True
-        model_info["loadtime"] = data["loadtime"]
+        print("[autoscaler_server] model loaded")
 
-    if "tokens" in data.keys():
-        model_info["tokens"] += data["tokens"]
-        model_info["tokens/s"] = data["tokens/s"]
+    if "tokens/s" in data.keys():
+        if data["tokens/s"] >= 1.0: #could use an average system in the future
+            model_info["tokens/s"] = data["tokens/s"]
+            print("[autoscaler_server] updated tokens/s")
+
+    if "num_running" in data.keys():
+        model_info["num_running"] = data["num_running"]
+        print("[autoscaler_server] updated num_running")
 
     return "Updated model info"
 

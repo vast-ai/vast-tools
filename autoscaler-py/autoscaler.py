@@ -35,15 +35,8 @@ def get_curr_instances():
 
 #could be called on the output from 'show instance' or 'search offers'
 def tps(instance):
-	# print(instance['machine_id'])
 	if "tokens/s" in instance.keys():
 		return instance["tokens/s"]
-	# filepath = f"instance_info/{instance['machine_id']}.json"
-	# if os.path.exists(filepath):
-	# 	with open(filepath, "r") as f:
-	# 		instance_log = json.load(f)
-	# 		if "tokens/s" in instance_log.keys():
-	# 			return instance_log["tokens/s"]
 	return 0.0
 
 def expected_performance(instance): #could be made more sophisticated, change to cost per token
@@ -92,7 +85,7 @@ class InstanceSetMetrics: #Represents metrics that the client would have availab
 		return ret
 
 class InstanceSet:
-	def __init__(self, manage=False, streaming=False, model="vllm-13"):
+	def __init__(self, manage=False, streaming=False, model="vllm-13", cloudflare_addr=None):
 		self.num_hot = 0
 		self.num_busy = 0
 
@@ -113,7 +106,7 @@ class InstanceSet:
 		self.cost_dict = {}
 		self.metrics = InstanceSetMetrics()
 		self.lock = Lock()
-		
+
 		self.update_instance_info(init=True)
 		self.strat = SimpleStrategy(avg_num_hot=len(self.running_instances) + len(self.loading_instances) + len(self.cold_instances))
 
@@ -125,28 +118,33 @@ class InstanceSet:
 		self.p1 = Thread(target=self.update_and_manage_background, args=(self.exit_event,))
 		self.p1.start()
 
+		self.cloudflare_addr = cloudflare_addr
+		self.start_models()
+
+	#for testing purposes
+	def start_models(self):
+		for instance in self.running_instances:
+			if self.instance_info_map[instance['id']]['model_loaded']:
+				print(f"starting id {instance['id']}")
+				port_num = str(instance["ssh_port"])
+				host = instance["ssh_host"]
+				ssh_auth_str = f"ssh -p {port_num} -o StrictHostKeyChecking=no root@{host}"
+				r = subprocess.run([f"{ssh_auth_str} export REPORT_ADDR={self.cloudflare_addr}"], shell=True, capture_output=True)
+				print(r)
+				r = subprocess.run([f"{ssh_auth_str} /src/host-server/start-model.sh"], shell=True, capture_output=True)
+				print(r)
+
 	def deconstruct(self):
 		print("[autoscaler] deconstructing")
+		self.write_instance_info()
 		self.exit_event.set()
 		self.p1.join()
 
-	# def update_tokens_per_second(self, instance): #need lock here?
-	# 	port_num = str(instance["ssh_port"])
-	# 	host = instance["ssh_host"]
-	# 	result = subprocess.run(["ssh", "-p", port_num, "-o", "StrictHostKeyChecking=no", "root@{}".format(host), "grep 'Output generated' /app/onstart.log | tail -n 1"], capture_output=True)
-	# 	out = result.stdout
-	# 	tps = None
-	# 	if out is not None:
-	# 		line = out.decode('utf-8')
-	# 		pattern = r"()\d+\.\d+(?=\stokens\/s)"
-	# 		match = re.search(pattern, line)
-	# 		if match is not None:
-	# 			tps = float(match.group())
-
-	# 	# if tps is not None:
-	# 	# 	instance["tokens/s"] = tps
-	# 	# 	with open(f"instance_info/{instance['machine_id']}.json", "w") as f:
-	# 	# 		json.dump(instance, f)
+	def write_instance_info(self):
+		for id, info in self.instance_info_map.items():
+			filepath = f"instance_info/{id}.json"
+			with open(filepath, 'w') as f:
+				json.dump(info, f)
 
 	def update_and_manage_background(self, event):
 		while not event.is_set():
@@ -194,7 +192,7 @@ class InstanceSet:
 					instance["mtoken"] = self.instance_info_map[instance["id"]]["mtoken"] #for use by loadbalancer
 					instance["tokens/s"] = self.instance_info_map[instance["id"]]["tokens/s"]
 					hot_instances.append(instance)
-				
+
 				running_instances.append(instance)
 			elif instance['actual_status'] == 'loading' or instance['actual_status'] == None or (instance['actual_status'] == 'created' and instance['intended_status'] == 'running'):
 				loading_instances.append(instance)
