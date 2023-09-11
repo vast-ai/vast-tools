@@ -35,7 +35,7 @@ def get_curr_instances():
 
 #could be called on the output from 'show instance' or 'search offers'
 def tps(instance):
-	if "tokens/s" in instance.keys():
+	if "tokens/s" in instance.keys() and instance["tokens/s"] is not None:
 		return instance["tokens/s"]
 	return 0.0
 
@@ -113,13 +113,13 @@ class InstanceSet:
 		with open(INSTANCE_CONFIG_NAME, "r") as f:
 			self.instance_config = json.load(f)
 
+		self.cloudflare_addr = cloudflare_addr
+		self.start_models()
+
 		self.exit_event = Event()
 		self.manage_threads = []
 		self.p1 = Thread(target=self.update_and_manage_background, args=(self.exit_event,))
 		self.p1.start()
-
-		self.cloudflare_addr = cloudflare_addr
-		self.start_models()
 
 	#for testing purposes
 	def start_models(self):
@@ -128,11 +128,12 @@ class InstanceSet:
 				print(f"starting id {instance['id']}")
 				port_num = str(instance["ssh_port"])
 				host = instance["ssh_host"]
-				ssh_auth_str = f"ssh -p {port_num} -o StrictHostKeyChecking=no root@{host}"
-				r = subprocess.run([f"{ssh_auth_str} export REPORT_ADDR={self.cloudflare_addr}"], shell=True, capture_output=True)
-				print(r)
-				r = subprocess.run([f"{ssh_auth_str} /src/host-server/start-model.sh"], shell=True, capture_output=True)
-				print(r)
+				ssh_auth_str = f'ssh -p {port_num} -o StrictHostKeyChecking=no root@{host}'
+				process = subprocess.Popen([f"{ssh_auth_str} '/src/host-server/start_up.sh {self.cloudflare_addr}'"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+				for line in process.stdout:
+					print(line.decode('utf-8'))
+					if "started model" in line.decode('utf-8'):
+						break
 
 	def deconstruct(self):
 		print("[autoscaler] deconstructing")

@@ -15,10 +15,15 @@ autoscaler = None
 def get_cloudflared_link():
     process = subprocess.Popen([f"cloudflared tunnel --url http://localhost:8000"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
     http_pattern = r'https://[a-zA-Z0-9-]+\.trycloudflare\.com'
+    url = None
     for line in process.stderr:
-        http_match = re.search(http_pattern, line)
+        print(line.decode('utf-8'))
+        http_match = re.search(http_pattern, line.decode('utf-8'))
         if http_match:
-            return http_match.group()
+            url = http_match.group()
+            break
+    if url:
+        return url + '/gpureport'
 
 @app.route("/setup", methods=['POST'])
 def setup_autoscaler():
