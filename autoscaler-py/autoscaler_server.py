@@ -81,6 +81,31 @@ def get_server_status():
     autoscaler.lock.release()
     return status
 
+# @app.route('/gpureport', methods=['POST'])
+# def gpu_report_hot():
+#     global autoscaler
+#     data = request.json
+#     instance_id = data["id"]
+#     print(f"[autoscaler_server] recieved message from id: {instance_id}")
+
+#     # need locks here?
+#     model_info = autoscaler.instance_info_map[instance_id]
+#     if not(model_info["model_loaded"]) and "loaded" in data.keys() and data["loaded"]:
+#         model_info["model_loaded"] = True
+#         print("[autoscaler_server] model loaded")
+
+#     if "tokens/s" in data.keys():
+#         if data["tokens/s"] >= 1.0: #could use an average system in the future
+#             model_info["tokens/s"] = data["tokens/s"]
+#             print("[autoscaler_server] updated tokens/s")
+
+#     if "num_running" in data.keys():
+#         model_info["num_running"] = data["num_running"]
+#         print("[autoscaler_server] updated num_running")
+
+#     return "Updated model info"
+
+# Different version for HF TGI
 @app.route('/gpureport', methods=['POST'])
 def gpu_report_hot():
     global autoscaler
@@ -94,14 +119,12 @@ def gpu_report_hot():
         model_info["model_loaded"] = True
         print("[autoscaler_server] model loaded")
 
-    if "tokens/s" in data.keys():
-        if data["tokens/s"] >= 1.0: #could use an average system in the future
-            model_info["tokens/s"] = data["tokens/s"]
-            print("[autoscaler_server] updated tokens/s")
+    if "time_per_token" in data.keys():
+        model_info["tokens/s"] = 1 / data["time_per_token"]
+        model_info["tokens"] += (model_info["tokens/s"] * data["inference_time"])
 
-    if "num_running" in data.keys():
-        model_info["num_running"] = data["num_running"]
-        print("[autoscaler_server] updated num_running")
+        print("[autoscaler_server] updated tokens/s")
+
 
     return "Updated model info"
 

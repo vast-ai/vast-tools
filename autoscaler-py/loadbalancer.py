@@ -13,8 +13,8 @@ FULL_LOAD_THRESHOLD = 2.5
 DEFAULT_TPS = 35.0
 MAX_CONCURRENCY = 100
 
-def get_address_auth(instance):
-	addr = instance["public_ipaddr"] + ":" + instance["ports"]["5000/tcp"][0]["HostPort"]
+def get_address_auth(instance): #used to be 5000, might change soon
+	addr = instance["public_ipaddr"] + ":" + instance["ports"]["3000/tcp"][0]["HostPort"]
 	addr = addr.replace('\n', '')
 	return addr
 

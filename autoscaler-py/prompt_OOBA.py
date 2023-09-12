@@ -2,6 +2,8 @@ import requests
 import json
 import time
 from websockets.sync.client import connect
+from text_generation import Client
+import json
 
 MSG_END = "$$$"
 
@@ -108,12 +110,71 @@ def send_vllm_request_streaming_test_auth(gpu_server_addr, mtoken):
 		return True
 	else:
 		return False
+	
+def send_hf_tgi_streaming(gpu_server_addr, prompt):
+	client = Client(f"http://{gpu_server_addr}")
+	first_msg_wait = 0.0
+	first = True
+	response = ""
+	t1 = time.time()
+	stream = client.generate_stream(prompt, max_new_tokens=50)
+	num_tokens = 0
+	for token in stream:
+		if first:
+			t2 = time.time()
+			first_msg_wait = t2 - t1
+			first = False
 
+		response += token.text
+		num_tokens += 1
+		
+	return {"reply" : response, "error" : None, "num_tokens" : num_tokens, "first_msg_wait" : first_msg_wait}
+
+
+
+def decode_line(line):
+	payload = line.decode("utf-8")
+
+	if payload.startswith("data:"):
+		json_payload = json.loads(payload.lstrip("data:").rstrip("/n"))
+		return json_payload["token"]["text"]
+	else:
+		return None
+
+
+def send_hf_tgi_streaming_auth(gpu_server_addr, prompt, token):
+	request_dict = {"token" : token, "prompt" : prompt}
+	URI = f'http://{gpu_server_addr}/connect'
+	
+	num_tokens = 0
+	first_msg_wait = 0.0
+	first = True
+	response = ""
+	t1 = time.time()
+	resp = requests.post(URI, json=request_dict, stream=True)
+
+	if resp.status_code == 200:
+		for line in resp.iter_lines():
+			if line == b"\n":
+				continue
+
+			if first:
+				t2 = time.time()
+				first_msg_wait = t2 - t1
+				first = False
+
+			line_token = decode_line(line)
+			if line_token:
+				response += line_token
+				num_tokens += 1
+
+	return {"reply" : response, "error" : None, "num_tokens" : num_tokens, "first_msg_wait" : first_msg_wait}
 
 def main():
-	addr = "31.12.82.146:16100"
-	mtoken = "3ee1bbaab030a853dc5b6104ffb0d7b26e0b3a9a7bc790368822bad56dd9c048"
-	send_vllm_request_streaming_test_auth(addr, mtoken)
+	addr = "79.116.44.21:25173"
+	mtoken = "mtoken"
+	prompt = "What is the best state in the US?"
+	print(send_hf_tgi_streaming_auth(addr, prompt, mtoken))
 
 if __name__ == "__main__":
 	main()

@@ -129,10 +129,14 @@ class InstanceSet:
 				port_num = str(instance["ssh_port"])
 				host = instance["ssh_host"]
 				ssh_auth_str = f'ssh -p {port_num} -o StrictHostKeyChecking=no root@{host}'
-				process = subprocess.Popen([f"{ssh_auth_str} '/src/host-server/start_up.sh {self.cloudflare_addr}'"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+				process = subprocess.Popen([f"{ssh_auth_str} '/root/host-server/start_up_hf_tgi.sh {self.cloudflare_addr}'"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+				print(f"pid: {process.pid}")
+				for line in process.stderr:
+					print(line.decode('utf-8'))
+
 				for line in process.stdout:
 					print(line.decode('utf-8'))
-					if "started model" in line.decode('utf-8'):
+					if "started auth server" in line.decode('utf-8'):
 						break
 
 	def deconstruct(self):

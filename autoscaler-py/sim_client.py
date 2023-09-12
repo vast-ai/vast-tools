@@ -7,7 +7,7 @@ import json
 import os
 
 from autoscaler import get_curr_instances, get_model_address
-from prompt_OOBA import send_vllm_request_auth, send_vllm_request_streaming_auth
+from prompt_OOBA import send_vllm_request_auth, send_vllm_request_streaming_auth, send_hf_tgi_streaming_auth
 
 WAIT_INTERVAL = 5
 
@@ -223,7 +223,7 @@ class Client:
 			self.update_metrics_started(gpu_addr)
 			start_time = time.time()
 			if self.streaming:
-				gpu_response = send_vllm_request_streaming_auth(gpu_addr, id_token, text_prompt)
+				gpu_response = send_hf_tgi_streaming_auth(gpu_addr, id_token, text_prompt)
 			else:
 				gpu_response = send_vllm_request_auth(gpu_addr, id_token, text_prompt)
 
