@@ -131,7 +131,6 @@ def send_hf_tgi_streaming(gpu_server_addr, prompt):
 	return {"reply" : response, "error" : None, "num_tokens" : num_tokens, "first_msg_wait" : first_msg_wait}
 
 
-
 def decode_line(line):
 	payload = line.decode("utf-8")
 
@@ -142,7 +141,7 @@ def decode_line(line):
 		return None
 
 
-def send_hf_tgi_streaming_auth(gpu_server_addr, prompt, token):
+def send_hf_tgi_streaming_auth(gpu_server_addr, token, prompt):
 	request_dict = {"token" : token, "prompt" : prompt}
 	URI = f'http://{gpu_server_addr}/connect'
 	
@@ -152,6 +151,7 @@ def send_hf_tgi_streaming_auth(gpu_server_addr, prompt, token):
 	response = ""
 	t1 = time.time()
 	resp = requests.post(URI, json=request_dict, stream=True)
+	error = None
 
 	if resp.status_code == 200:
 		for line in resp.iter_lines():
@@ -164,11 +164,14 @@ def send_hf_tgi_streaming_auth(gpu_server_addr, prompt, token):
 				first = False
 
 			line_token = decode_line(line)
+			
 			if line_token:
 				response += line_token
 				num_tokens += 1
+	else:
+		error = resp.status_code
 
-	return {"reply" : response, "error" : None, "num_tokens" : num_tokens, "first_msg_wait" : first_msg_wait}
+	return {"reply" : response, "error" : error, "num_tokens" : num_tokens, "first_msg_wait" : first_msg_wait}
 
 def main():
 	addr = "79.116.44.21:25173"

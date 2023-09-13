@@ -14,11 +14,18 @@ autoscaler = None
 
 def get_cloudflared_link():
     process = subprocess.Popen([f"cloudflared tunnel --url http://localhost:8000"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+    tee_process = subprocess.Popen(
+        "tee -a cloudflare.log",
+        shell=True,
+        stdin=process.stderr,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True 
+    )
     http_pattern = r'https://[a-zA-Z0-9-]+\.trycloudflare\.com'
     url = None
-    for line in process.stderr:
-        print(line.decode('utf-8'))
-        http_match = re.search(http_pattern, line.decode('utf-8'))
+    for line in tee_process.stdout:
+        http_match = re.search(http_pattern, line)
         if http_match:
             url = http_match.group()
             break
@@ -81,6 +88,7 @@ def get_server_status():
     autoscaler.lock.release()
     return status
 
+# Old version for VLLM
 # @app.route('/gpureport', methods=['POST'])
 # def gpu_report_hot():
 #     global autoscaler
@@ -113,18 +121,15 @@ def gpu_report_hot():
     instance_id = data["id"]
     print(f"[autoscaler_server] recieved message from id: {instance_id}")
 
-    # need locks here?
     model_info = autoscaler.instance_info_map[instance_id]
-    if not(model_info["model_loaded"]) and "loaded" in data.keys() and data["loaded"]:
-        model_info["model_loaded"] = True
-        print("[autoscaler_server] model loaded")
+    if "loaded" in data.keys() and data["loaded"]:
+        model_info["model_loaded"] = True #model loaded is then the model files have finished downloading to the instance
+        model_info["hot"] = True #hot is when the model is in memory
+        print("[autoscaler_server] model loaded and hot")
 
     if "time_per_token" in data.keys():
         model_info["tokens/s"] = 1 / data["time_per_token"]
         model_info["tokens"] += (model_info["tokens/s"] * data["inference_time"])
-
-        print("[autoscaler_server] updated tokens/s")
-
 
     return "Updated model info"
 

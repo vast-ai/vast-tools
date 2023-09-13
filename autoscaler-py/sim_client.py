@@ -2,8 +2,6 @@ import time
 from threading import Lock
 import requests
 from collections import defaultdict
-import subprocess
-import json
 import os
 
 from autoscaler import get_curr_instances, get_model_address
@@ -12,9 +10,10 @@ from prompt_OOBA import send_vllm_request_auth, send_vllm_request_streaming_auth
 WAIT_INTERVAL = 5
 
 class ClientMetrics:
-	def __init__(self, streaming):
+	def __init__(self, streaming, backend):
 
 		self.streaming = streaming
+		self.backend = backend
 
 		self.num_serverless_server_started = 0
 		self.num_serverless_server_finished = 0
@@ -81,7 +80,7 @@ class ClientMetrics:
 		for instance in instances:
 			if "ports" not in instance.keys():
 				continue
-			if get_model_address(instance, self.streaming) in self.machine_stats_dict.keys():
+			if get_model_address(instance, self.streaming, self.backend) in self.machine_stats_dict.keys():
 				dph += instance["dph_base"]
 		self.total_cost = (self.get_time_elapsed() / (60 * 60)) * dph
 
@@ -146,11 +145,12 @@ class ClientMetrics:
 		# self.lock.release()
 
 class Client:
-	def __init__(self, streaming, model, manage):
+	def __init__(self, streaming, backend, model, manage):
 		self.streaming = streaming
+		self.backend = backend
 		self.model = model
 		self.manage = manage
-		self.metrics = ClientMetrics(streaming=streaming)
+		self.metrics = ClientMetrics(streaming=streaming, backend=backend)
 		self.lb_server_addr = '127.0.0.1:5000'
 		self.auto_server_addr = '127.0.0.1:8000'
 		# self.vllm_server_addr = '89.37.121.214:48271'
@@ -160,7 +160,7 @@ class Client:
 
 	def setup_lb(self):
 		URI = f'http://{self.lb_server_addr}/setup'
-		autoscaler_args = {"streaming" : self.streaming, "manage" : self.manage, "model" : self.model}
+		autoscaler_args = {"streaming" : self.streaming, "backend" : self.backend, "manage" : self.manage, "model" : self.model}
 		request_dict = {"args" : autoscaler_args}
 		response = requests.post(URI, json=request_dict)
 		if response.status_code == 200:
@@ -222,10 +222,13 @@ class Client:
 			id_token = response.json()["token"]
 			self.update_metrics_started(gpu_addr)
 			start_time = time.time()
-			if self.streaming:
-				gpu_response = send_hf_tgi_streaming_auth(gpu_addr, id_token, text_prompt)
+			if self.backend == "hf_tgi":
+				gpu_response = send_hf_tgi_streaming_auth(gpu_addr, token=id_token, prompt=text_prompt)
 			else:
-				gpu_response = send_vllm_request_auth(gpu_addr, id_token, text_prompt)
+				if self.streaming:
+					gpu_response = send_vllm_request_streaming_auth(gpu_addr, token=id_token, prompt=text_prompt)
+				else:
+					gpu_response = send_vllm_request_auth(gpu_addr, id_token, text_prompt)
 
 			end_time = time.time()
 			time_elapsed = end_time - start_time

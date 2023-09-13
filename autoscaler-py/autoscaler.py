@@ -45,11 +45,15 @@ def expected_performance(instance): #could be made more sophisticated, change to
 def get_instance_id(instance):
 	return instance["id"]
 
-def get_model_address(instance, streaming):
-	if streaming:
-		addr = instance["public_ipaddr"] + ":" + instance["ports"]["5005/tcp"][0]["HostPort"]
-	else:
-		addr = instance["public_ipaddr"] + ":" + instance["ports"]["5000/tcp"][0]["HostPort"]
+def get_model_address(instance, streaming, backend):
+	if backend == "vllm":
+		if streaming:
+			addr = instance["public_ipaddr"] + ":" + instance["ports"]["5005/tcp"][0]["HostPort"]
+		else:
+			addr = instance["public_ipaddr"] + ":" + instance["ports"]["5000/tcp"][0]["HostPort"]
+	elif backend == "hf_tgi":
+		addr = instance["public_ipaddr"] + ":" + instance["ports"]["3000/tcp"][0]["HostPort"]
+	
 	addr = addr.replace('\n', '')
 	return addr
 
@@ -85,7 +89,7 @@ class InstanceSetMetrics: #Represents metrics that the client would have availab
 		return ret
 
 class InstanceSet:
-	def __init__(self, manage=False, streaming=False, model="vllm-13", cloudflare_addr=None):
+	def __init__(self, manage=False, streaming=False, backend="hf_tgi", model="vllm-13", cloudflare_addr=None):
 		self.num_hot = 0
 		self.num_busy = 0
 
@@ -100,6 +104,7 @@ class InstanceSet:
 		self.ignore_instance_ids = IGNORE_INSTANCE_IDS
 
 		self.streaming = streaming
+		self.backend = backend
 		self.manage = manage
 		self.model = model
 
@@ -126,14 +131,11 @@ class InstanceSet:
 		for instance in self.running_instances:
 			if self.instance_info_map[instance['id']]['model_loaded']:
 				print(f"starting id {instance['id']}")
-				port_num = str(instance["ssh_port"])
-				host = instance["ssh_host"]
+				port_num = instance["ports"]['22/tcp'][0]["HostPort"]
+				host = instance["public_ipaddr"]
 				ssh_auth_str = f'ssh -p {port_num} -o StrictHostKeyChecking=no root@{host}'
-				process = subprocess.Popen([f"{ssh_auth_str} '/root/host-server/start_up_hf_tgi.sh {self.cloudflare_addr}'"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
-				print(f"pid: {process.pid}")
-				for line in process.stderr:
-					print(line.decode('utf-8'))
-
+				process = subprocess.Popen([f"{ssh_auth_str} '/root/host-server/start_server.sh {self.cloudflare_addr}'"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+				# process = subprocess.Popen([f"{ssh_auth_str} 'env'"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
 				for line in process.stdout:
 					print(line.decode('utf-8'))
 					if "started auth server" in line.decode('utf-8'):
@@ -147,6 +149,10 @@ class InstanceSet:
 
 	def write_instance_info(self):
 		for id, info in self.instance_info_map.items():
+			print(info)
+			if "hot" in info.keys() and info["hot"]:
+				info["hot"] = False
+			
 			filepath = f"instance_info/{id}.json"
 			with open(filepath, 'w') as f:
 				json.dump(info, f)
@@ -193,7 +199,7 @@ class InstanceSet:
 			if (instance['actual_status'] == 'offline') or (instance['status_msg'] is not None and 'Error response from daemon' in instance['status_msg']) or (instance['machine_id'] in BAD_MACHINE_IDS):
 				self.bad_instance_ids.append(instance['id'])
 			elif instance['actual_status'] == 'running':
-				if self.instance_info_map[instance['id']]['model_loaded']:
+				if 'hot' in self.instance_info_map[instance['id']].keys() and self.instance_info_map[instance['id']]['hot']:
 					instance["mtoken"] = self.instance_info_map[instance["id"]]["mtoken"] #for use by loadbalancer
 					instance["tokens/s"] = self.instance_info_map[instance["id"]]["tokens/s"]
 					hot_instances.append(instance)
@@ -413,7 +419,7 @@ class InstanceSet:
 				response = json.loads(result.stdout.decode('utf-8'))
 				if response["success"]:
 					new_id = response["new_contract"]
-					init_json = {"mtoken" : mtoken, "model_loaded" : False, "tokens/s" : None, "tokens" : 0, "error" : False}
+					init_json = {"mtoken" : mtoken, "model_loaded" : False, "hot" : False, "tokens/s" : None, "tokens" : 0, "error" : False}
 					self.instance_info_map[new_id] = init_json
 					with open(f"instance_info/{new_id}.json", "w") as f:
 						json.dump(init_json, f)
