@@ -30,7 +30,7 @@ def get_cloudflared_link():
             url = http_match.group()
             break
     if url:
-        return url + '/gpureport'
+        return url + '/worker_status'
 
 @app.route("/setup", methods=['POST'])
 def setup_autoscaler():
@@ -114,7 +114,7 @@ def get_server_status():
 #     return "Updated model info"
 
 # Different version for HF TGI
-@app.route('/gpureport', methods=['POST'])
+@app.route('/worker_status', methods=['POST'])
 def gpu_report_hot():
     global autoscaler
     data = request.json

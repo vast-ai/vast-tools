@@ -119,7 +119,7 @@ class InstanceSet:
 			self.instance_config = json.load(f)
 
 		self.cloudflare_addr = cloudflare_addr
-		self.start_models()
+		# self.start_models()
 
 		self.exit_event = Event()
 		self.manage_threads = []
