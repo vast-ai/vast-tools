@@ -57,6 +57,30 @@
             "disk" : "16.0",
             "env" : "-e HF_TOKEN=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 -e MODEL_PATH='/src/models/TheBloke_Llama-2-13B-chat-GPTQ_gptq-4bit-32g-actorder_True'"
         }
+    },
+    "hf-tgi-70": {
+        "get" : {
+            "gpu" : [
+                {
+                    "gpu_name" : "A100_SXM4",
+                    "num_gpus" : 2
+                },
+                {
+                    "gpu_name" : "RTX_A6000",
+                    "num_gpus" : 4
+                },
+                {
+                    "gpu_name" : "RTX_4090",
+                    "num_gpus" : 8
+                }
+            ],
+            "disk_space" : 200.0
+        },
+        "create": {
+            "onstart" : "scripts/on_start_hf_tgi",
+            "image" : "ghcr.io/huggingface/text-generation-inference:1.0.3",
+            "disk" : "200.0",
+            "env" : "-e JUPYTER_DIR=/ -e HUGGING_FACE_HUB_TOKEN=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 -p 80:80 -p 3000:3000"
+        }
     }
-
 }

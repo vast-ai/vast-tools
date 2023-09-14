@@ -173,11 +173,20 @@ def send_hf_tgi_streaming_auth(gpu_server_addr, token, prompt):
 
 	return {"reply" : response, "error" : error, "num_tokens" : num_tokens, "first_msg_wait" : first_msg_wait}
 
-def main():
-	addr = "79.116.44.21:25173"
-	mtoken = "mtoken"
-	prompt = "What is the best state in the US?"
-	print(send_hf_tgi_streaming_auth(addr, prompt, mtoken))
+def hf_tgi_streaming_auth_generator(gpu_server_addr, token, inputs, parameters):
+	request_dict = {"token" : token, "inputs" : inputs, "parameters" : parameters}
+	URI = f'http://{gpu_server_addr}/connect'
+	
+	resp = requests.post(URI, json=request_dict, stream=True)
 
-if __name__ == "__main__":
-	main()
+	if resp.status_code == 200:
+		for line in resp.iter_lines():
+			if line == b"\n":
+				continue
+
+			line_token = decode_line(line)
+			
+			if line_token:
+				print(f"line_token: {line_token}")
+				yield line_token
+

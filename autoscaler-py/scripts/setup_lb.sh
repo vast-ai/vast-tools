@@ -1,0 +1,1 @@
+curl 127.0.0.1:5000/setup -X POST -d '{"args": {"streaming" : true, "backend" : "hf_tgi", "manage" : false, "model" : "hf-tgi-70"}}' -H 'Content-Type: application/json'

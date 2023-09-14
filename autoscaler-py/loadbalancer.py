@@ -7,7 +7,7 @@ import time
 from autoscaler_client import Client
 from instance_client import InstanceClient
 from autoscaler import get_model_address
-
+from prompt_model import hf_tgi_streaming_auth_generator
 TIME_INTERVAL_SECONDS = 5
 FULL_LOAD_THRESHOLD = 2.5
 DEFAULT_TPS = 35.0
@@ -112,7 +112,7 @@ class LoadBalancer:
 			self.queue_duration[hot_server["id"]] += ((1 / tps) * num_tokens)
 			self.hot_queue.put((self.queue_duration[hot_server["id"]], hot_server["id"], hot_server))
 		return addr, token
-
+	
 	def deconstruct(self, kill_servers=False):
 		print("[loadbalancer] deconstructing")
 		self.client.destroy_autoscaler()

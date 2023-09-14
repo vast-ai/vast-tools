@@ -40,13 +40,13 @@ def setup_autoscaler():
     cloudflare_addr=get_cloudflared_link()
     print(f"got link: {cloudflare_addr}")
     autoscaler = InstanceSet(**data["args"], cloudflare_addr=cloudflare_addr)
-    return "Started InstanceSet"
+    return "Started InstanceSet'n"
 
 @app.route("/destroy", methods=['POST'])
 def destroy_autoscaler():
     global autoscaler
     autoscaler.deconstruct()
-    return "Destroyed InstanceSet"
+    return "Destroyed InstanceSet\n"
 
 @app.route("/hot", methods=["GET"])
 def get_hot_instances():

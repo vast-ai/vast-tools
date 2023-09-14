@@ -7,15 +7,15 @@ import json
 import secrets
 import os
 from ratio_manager import update_rolling_average
-from prompt_OOBA import send_vllm_request_auth, send_vllm_request_streaming_test_auth
+from prompt_model import send_vllm_request_auth, send_vllm_request_streaming_test_auth
 
 TIME_INTERVAL_SECONDS = 5
 MAX_COST_PER_HOUR = 10.0
 MAX_CONCURRENCY = 100
 MAX_ACTIONS = 3
 INSTANCE_CONFIG_NAME = "configs/OOBA_configs.json"
-IGNORE_INSTANCE_IDS = [6924410, 6924411, 6925426, 6924389, 6924390, 6924720] # 6925427
-BAD_MACHINE_IDS = [4424]
+IGNORE_INSTANCE_IDS = []
+BAD_MACHINE_IDS = []
 ERROR_STRINGS = ["safetensors_rust.SafetensorError", "RuntimeError", "Error: remote port forwarding failed"]
 TEST_PROMPT = "What?"
 
@@ -129,27 +129,27 @@ class InstanceSet:
 	#for testing purposes
 	def start_models(self):
 		for instance in self.running_instances:
-			if self.instance_info_map[instance['id']]['model_loaded']:
-				print(f"starting id {instance['id']}")
-				port_num = instance["ports"]['22/tcp'][0]["HostPort"]
-				host = instance["public_ipaddr"]
-				ssh_auth_str = f'ssh -p {port_num} -o StrictHostKeyChecking=no root@{host}'
-				process = subprocess.Popen([f"{ssh_auth_str} '/root/host-server/start_server.sh {self.cloudflare_addr}'"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
-				# process = subprocess.Popen([f"{ssh_auth_str} 'env'"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
-				for line in process.stdout:
-					print(line.decode('utf-8'))
-					if "started auth server" in line.decode('utf-8'):
-						break
+			print(f"starting id {instance['id']}")
+			# port_num = instance["ports"]['22/tcp'][0]["HostPort"]
+			# host = instance["public_ipaddr"]
+			port_num = instance["ssh_port"]
+			host = instance["ssh_host"]
+			ssh_auth_str = f'ssh -p {port_num} -o StrictHostKeyChecking=no root@{host}'
+			process = subprocess.Popen([f"{ssh_auth_str} '/usr/src/host-server/start_server.sh {self.cloudflare_addr}'"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+			for line in process.stdout:
+				print(line.decode('utf-8'))
+				if "started auth server" in line.decode('utf-8'):
+					break
 
 	def deconstruct(self):
 		print("[autoscaler] deconstructing")
 		self.write_instance_info()
 		self.exit_event.set()
 		self.p1.join()
+		print("[autoscaler] finished deconstruction")
 
 	def write_instance_info(self):
 		for id, info in self.instance_info_map.items():
-			print(info)
 			if "hot" in info.keys() and info["hot"]:
 				info["hot"] = False
 			
@@ -407,12 +407,13 @@ class InstanceSet:
 		num_gpus = instance["num_gpus"]
 		config = self.instance_config[model]["create"]
 		mtoken = secrets.token_hex(32)
-		if self.streaming:
+		if self.streaming and self.backend == "vllm":
 			onstart = f"{config['onstart']}_streaming.sh"
 		else:
 			onstart = f"{config['onstart']}.sh"
-		args = f" --onstart {onstart} --image {config['image']} --disk {config['disk']} --env '-e MASTER_TOKEN={mtoken} -e NUM_GPUS={num_gpus} {config['env']}'" # --ssh --direct
-		result = subprocess.run([f"vastai create instance {str(instance_id)}" + args + " --raw"], shell=True, capture_output=True)
+		args = f" --onstart {onstart} --image {config['image']} --disk {config['disk']} --env '-e MASTER_TOKEN={mtoken} -e NUM_GPUS={num_gpus} {config['env']}'"
+		full_cmd = f"vastai create instance {str(instance_id)}" + args + " --raw"
+		result = subprocess.run([full_cmd], shell=True, capture_output=True)
 		print(result)
 		if result is not None and result.stdout.decode('utf-8') is not None:
 			try:

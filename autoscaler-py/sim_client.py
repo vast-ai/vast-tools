@@ -5,7 +5,7 @@ from collections import defaultdict
 import os
 
 from autoscaler import get_curr_instances, get_model_address
-from prompt_OOBA import send_vllm_request_auth, send_vllm_request_streaming_auth, send_hf_tgi_streaming_auth
+from prompt_model import send_vllm_request_auth, send_vllm_request_streaming_auth, send_hf_tgi_streaming_auth
 
 WAIT_INTERVAL = 5
 
@@ -209,13 +209,9 @@ class Client:
 	def send_prompt(self, text_prompt, id, num_tokens=100):
 		request_dict = {"num_tokens" : num_tokens}
 		URI = f'http://{self.lb_server_addr}/connect'
-		# self.metrics.lock.acquire()
 		self.metrics.num_serverless_server_started += 1
-		# self.metrics.lock.release()
 		response = requests.get(URI, json=request_dict)
-		# self.metrics.lock.acquire()
 		self.metrics.num_serverless_server_finished += 1
-		# self.metrics.lock.release()
 
 		if response.status_code == 200 and response.json()["addr"] is not None:
 			gpu_addr = response.json()["addr"]
