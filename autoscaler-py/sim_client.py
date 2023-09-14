@@ -219,7 +219,7 @@ class Client:
 			self.update_metrics_started(gpu_addr)
 			start_time = time.time()
 			if self.backend == "hf_tgi":
-				gpu_response = send_hf_tgi_streaming_auth(gpu_addr, token=id_token, prompt=text_prompt)
+				gpu_response = send_hf_tgi_streaming_auth(gpu_addr, token=id_token, inputs=text_prompt)
 			else:
 				if self.streaming:
 					gpu_response = send_vllm_request_streaming_auth(gpu_addr, token=id_token, prompt=text_prompt)

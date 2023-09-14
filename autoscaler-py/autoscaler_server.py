@@ -125,6 +125,7 @@ def gpu_report_hot():
     if "loaded" in data.keys() and data["loaded"]:
         model_info["model_loaded"] = True #model loaded is then the model files have finished downloading to the instance
         model_info["hot"] = True #hot is when the model is in memory
+        model_info["load_time"] = data["load_time"]
         print("[autoscaler_server] model loaded and hot")
 
     if "time_per_token" in data.keys():

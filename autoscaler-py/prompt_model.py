@@ -141,9 +141,10 @@ def decode_line(line):
 		return None
 
 
-def send_hf_tgi_streaming_auth(gpu_server_addr, token, prompt):
-	request_dict = {"token" : token, "prompt" : prompt}
-	URI = f'http://{gpu_server_addr}/connect'
+def send_hf_tgi_streaming_auth(gpu_server_addr, token, inputs):
+	parameters = {"max_new_tokens":256}
+	request_dict = {"token" : token, "inputs" : inputs, "parameters" : parameters}
+	URI = f'http://{gpu_server_addr}/generate_stream'
 	
 	num_tokens = 0
 	first_msg_wait = 0.0
@@ -175,7 +176,7 @@ def send_hf_tgi_streaming_auth(gpu_server_addr, token, prompt):
 
 def hf_tgi_streaming_auth_generator(gpu_server_addr, token, inputs, parameters):
 	request_dict = {"token" : token, "inputs" : inputs, "parameters" : parameters}
-	URI = f'http://{gpu_server_addr}/connect'
+	URI = f'http://{gpu_server_addr}/generate_stream'
 	
 	resp = requests.post(URI, json=request_dict, stream=True)
 
