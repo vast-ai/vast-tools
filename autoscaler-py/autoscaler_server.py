@@ -119,7 +119,7 @@ def gpu_report_hot():
     global autoscaler
     data = request.json
     instance_id = data["id"]
-    print(f"[autoscaler_server] recieved message from id: {instance_id}")
+    print(f"[autoscaler_server] recieved message: {data} from id: {instance_id}")
 
     model_info = autoscaler.instance_info_map[instance_id]
     if "loaded" in data.keys() and data["loaded"]:

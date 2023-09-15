@@ -135,7 +135,7 @@ class InstanceSet:
 			port_num = instance["ssh_port"]
 			host = instance["ssh_host"]
 			ssh_auth_str = f'ssh -p {port_num} -o StrictHostKeyChecking=no root@{host}'
-			process = subprocess.Popen([f"{ssh_auth_str} '/usr/src/host-server/start_server.sh {self.cloudflare_addr}'"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+			process = subprocess.Popen([f"{ssh_auth_str} '/usr/src/host-server/start_server.sh {self.cloudflare_addr} meta-llama/Llama-2-70b-chat-hf 3000'"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
 			for line in process.stdout:
 				print(line.decode('utf-8'))
 				if "started auth server" in line.decode('utf-8'):
