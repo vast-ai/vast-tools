@@ -110,26 +110,22 @@ def send_vllm_request_streaming_test_auth(gpu_server_addr, mtoken):
 		return True
 	else:
 		return False
-	
-def send_hf_tgi_streaming(gpu_server_addr, prompt):
-	client = Client(f"http://{gpu_server_addr}")
-	first_msg_wait = 0.0
-	first = True
+
+def send_tgi_prompt(addr, token, text_prompt, max_new_tokens):
+	parameters = {"max_new_tokens" : max_new_tokens}
+	request_dict = {"token" : token, "inputs" : text_prompt, "parameters" : parameters}
+	URI = f'{addr}/generate'
+	# print(f"sending to URI: {URI}")
+	# num_tokens = 0
 	response = ""
-	t1 = time.time()
-	stream = client.generate_stream(prompt, max_new_tokens=50)
-	num_tokens = 0
-	for token in stream:
-		if first:
-			t2 = time.time()
-			first_msg_wait = t2 - t1
-			first = False
+	resp = requests.post(URI, json=request_dict, stream=True)
+	error = None
+	if resp.status_code == 200:
+		response = json.loads(resp.content)["generated_text"]
+	else:
+		error = resp.status_code
 
-		response += token.text
-		num_tokens += 1
-		
-	return {"reply" : response, "error" : None, "num_tokens" : num_tokens, "first_msg_wait" : first_msg_wait}
-
+	return {"reply" : response, "error" : error, "num_tokens" : max_new_tokens, "first_msg_wait" : None}
 
 def decode_line(line):
 	payload = line.decode("utf-8")
@@ -140,10 +136,9 @@ def decode_line(line):
 	else:
 		return None
 
-
-def send_hf_tgi_streaming_auth(gpu_server_addr, token, inputs):
-	parameters = {"max_new_tokens":256}
-	request_dict = {"token" : token, "inputs" : inputs, "parameters" : parameters}
+def send_tgi_prompt_streaming(addr, token, text_prompt, max_new_tokens):
+	parameters = {"max_new_tokens" : max_new_tokens}
+	request_dict = {"token" : token, "inputs" : text_prompt, "parameters" : parameters}
 	URI = f'http://{gpu_server_addr}/generate_stream'
 	
 	num_tokens = 0
@@ -174,20 +169,4 @@ def send_hf_tgi_streaming_auth(gpu_server_addr, token, inputs):
 
 	return {"reply" : response, "error" : error, "num_tokens" : num_tokens, "first_msg_wait" : first_msg_wait}
 
-def hf_tgi_streaming_auth_generator(gpu_server_addr, token, inputs, parameters):
-	request_dict = {"token" : token, "inputs" : inputs, "parameters" : parameters}
-	URI = f'http://{gpu_server_addr}/generate_stream'
-	
-	resp = requests.post(URI, json=request_dict, stream=True)
-
-	if resp.status_code == 200:
-		for line in resp.iter_lines():
-			if line == b"\n":
-				continue
-
-			line_token = decode_line(line)
-			
-			if line_token:
-				print(f"line_token: {line_token}")
-				yield line_token
 

@@ -3,9 +3,10 @@ from threading import Lock
 import requests
 from collections import defaultdict
 import os
+import sys
 
 from autoscaler import get_curr_instances, get_model_address
-from prompt_model import send_vllm_request_auth, send_vllm_request_streaming_auth, send_hf_tgi_streaming_auth
+from prompt_model import send_tgi_prompt
 
 WAIT_INTERVAL = 5
 
@@ -146,36 +147,36 @@ class ClientMetrics:
 
 class Client:
 	def __init__(self, streaming, backend, model, manage):
-		self.streaming = streaming
-		self.backend = backend
-		self.model = model
-		self.manage = manage
+		# self.streaming = streaming
+		# self.backend = backend
+		# self.model = model
+		# self.manage = manage
 		self.metrics = ClientMetrics(streaming=streaming, backend=backend)
-		self.lb_server_addr = '127.0.0.1:5000'
-		self.auto_server_addr = '127.0.0.1:8000'
+		self.lb_server_addr = '127.0.0.1:8081'
+		# self.auto_server_addr = '127.0.0.1:8000'
 		# self.vllm_server_addr = '89.37.121.214:48271'
 		self.error_fd = os.open("logs/error.txt", os.O_WRONLY | os.O_CREAT)
 		os.write(self.error_fd, f"ERRORS: \n".encode("utf-8"))
 		self.error_lock = Lock()
 
-	def setup_lb(self):
-		URI = f'http://{self.lb_server_addr}/setup'
-		autoscaler_args = {"streaming" : self.streaming, "backend" : self.backend, "manage" : self.manage, "model" : self.model}
-		request_dict = {"args" : autoscaler_args}
-		response = requests.post(URI, json=request_dict)
-		if response.status_code == 200:
-			print("[client] load balancer server set-up succeeded")
-		else:
-			print("[client] load balancer server set-up failed")
+	# def setup_lb(self):
+	# 	URI = f'http://{self.lb_server_addr}/setup'
+	# 	autoscaler_args = {"streaming" : self.streaming, "backend" : self.backend, "manage" : self.manage, "model" : self.model}
+	# 	request_dict = {"args" : autoscaler_args}
+	# 	response = requests.post(URI, json=request_dict)
+	# 	if response.status_code == 200:
+	# 		print("[client] load balancer server set-up succeeded")
+	# 	else:
+	# 		print("[client] load balancer server set-up failed")
 
-	def shutdown_lb(self, kill_servers=False):
-		request_dict = {"kill_servers": kill_servers}
-		URI = f'http://{self.lb_server_addr}/destroy'
-		response = requests.post(URI, json=request_dict)
-		if response.status_code == 200:
-			print("[client] load balancer server shutdown succeeded")
-		else:
-			print("[client] load balancer server shutdown failed")
+	# def shutdown_lb(self, kill_servers=False):
+	# 	request_dict = {"kill_servers": kill_servers}
+	# 	URI = f'http://{self.lb_server_addr}/destroy'
+	# 	response = requests.post(URI, json=request_dict)
+	# 	if response.status_code == 200:
+	# 		print("[client] load balancer server shutdown succeeded")
+	# 	else:
+	# 		print("[client] load balancer server shutdown failed")
 
 
 	def update_metrics_started(self, gpu_addr):
@@ -206,51 +207,54 @@ class Client:
 
 		# self.metrics.lock.release()
 
-	def send_prompt(self, text_prompt, id, num_tokens=100):
-		request_dict = {"num_tokens" : num_tokens}
-		URI = f'http://{self.lb_server_addr}/connect'
+	#DON'T PUSH WITH API KEY!!!
+	def get_addr(self, label="test", cost=0, api_key=""):
+		request_dict = {"endpoint" : label, "cost" : cost, "api_key" : api_key}
+		URI = f'http://{self.lb_server_addr}/queue_task/'
 		self.metrics.num_serverless_server_started += 1
-		response = requests.get(URI, json=request_dict)
+		# print(f"sending to URI: {URI} with dict: {request_dict}")
+		response = requests.post(URI, json=request_dict)
 		self.metrics.num_serverless_server_finished += 1
-
-		if response.status_code == 200 and response.json()["addr"] is not None:
-			gpu_addr = response.json()["addr"]
-			id_token = response.json()["token"]
-			self.update_metrics_started(gpu_addr)
-			start_time = time.time()
-			if self.backend == "hf_tgi":
-				gpu_response = send_hf_tgi_streaming_auth(gpu_addr, token=id_token, inputs=text_prompt)
-			else:
-				if self.streaming:
-					gpu_response = send_vllm_request_streaming_auth(gpu_addr, token=id_token, prompt=text_prompt)
-				else:
-					gpu_response = send_vllm_request_auth(gpu_addr, id_token, text_prompt)
-
-			end_time = time.time()
-			time_elapsed = end_time - start_time
-			success = (gpu_response["reply"] is not None)
-			self.update_metrics(gpu_addr, success, gpu_response["num_tokens"], time_elapsed, gpu_response["first_msg_wait"])
-			if not success:
-				self.error_lock.acquire()
-				os.write(self.error_fd, f"{gpu_response['error']}\n".encode("utf-8"))
-				self.error_lock.release()
-
-	def get_status(self):
-		URI = f'http://{self.auto_server_addr}/status'
-		response = requests.get(URI)
 		if response.status_code == 200:
-			response = response.json()
-			return response
+			return response.content.decode('utf-8')
+	
+	def send_prompt(self, addr, token, text_prompt, max_new_tokens):
+		self.update_metrics_started(addr)
+		
+		start_time = time.time()
+		worker_response = send_tgi_prompt(addr, token, text_prompt, max_new_tokens)
+		end_time = time.time()
 
-	def wait_for_hot(self):
-		num_hot = 0
-		while num_hot == 0:
-			print("[client] server not yet ready")
-			time.sleep(WAIT_INTERVAL)
-			status = self.get_status()
-			if status is not None:
-				num_hot = status["num_hot"]
-		print("[client] server now ready")
+		time_elapsed = end_time - start_time
+		success = (worker_response["reply"] is not None)
+		self.update_metrics(addr, success, worker_response["num_tokens"], time_elapsed, worker_response["first_msg_wait"])
+
+	def complete_request(self, text_prompt, request_str, num_tokens=100):
+		# print(f"{request_str} getting addr")
+		addr = self.get_addr(cost=num_tokens)
+		token = "d22bd4a60ac70b1bb20873dcd345abe8824f2fb9260df84e2e1320a207d0d247" #hardcoded for testing
+		# print(f"{request_str} got addr")
+		if addr is not None:
+			self.send_prompt(addr, token, text_prompt, num_tokens)
+		else:
+			print(f"[sim] failed communication with autoscaler server to get next address")
+
+	# def get_status(self):
+	# 	URI = f'http://{self.auto_server_addr}/status'
+	# 	response = requests.get(URI)
+	# 	if response.status_code == 200:
+	# 		response = response.json()
+	# 		return response
+
+	# def wait_for_hot(self):
+	# 	num_hot = 0
+	# 	while num_hot == 0:
+	# 		print("[client] server not yet ready")
+	# 		time.sleep(WAIT_INTERVAL)
+	# 		status = self.get_status()
+	# 		if status is not None:
+	# 			num_hot = status["num_hot"]
+	# 	print("[client] server now ready")
 
 	def deconstruct(self):
 		os.close(self.error_fd)

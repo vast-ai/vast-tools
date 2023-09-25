@@ -62,11 +62,13 @@ class Sim:
 		prob = user.rate * self.etime
 		if (not(user.waiting) and random.random() <= prob):
 			request_str = f"{user.id}-{user.ended_chats}"
+			# print(f"sending chat: {request_str}")
 			prompt = user.prompt
 			user.started_chats += 1
 			user.waiting = True
 			user.lock.release()
-			self.client.send_prompt(prompt, id=request_str)
+			self.client.complete_request(prompt, request_str)
+			# print(f"completed chat: {request_str}")
 			user.lock.acquire()
 			user.ended_chats += 1
 			user.waiting = False
@@ -81,17 +83,13 @@ class Sim:
 				futures.append(future)
 
 			while len(futures) > 0:
-				# if self.exit_event.is_set():
-				# 	for future in futures:
-				# 		cancel_result = future.cancel()
-				# 		print(cancel_result)
-				# 	break
 				done, pending = wait(futures, timeout=10, return_when=ALL_COMPLETED)
 				print(f"loop {i} has {len(pending)} pending and {len(done)} more done")
-				# print(pending)
+				print(pending)
 				futures = list(pending)
 
-
+	def spike_load():
+		pass
 
 	def update(self, i):
 		t = Thread(target=self.update_loop, args=(i,))
@@ -119,8 +117,6 @@ class Sim:
 	def run(self):
 		soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
 		print(f"[sim] starting, and open file soft limit = {soft_limit}, hard limit= {hard_limit}")
-		self.client.setup_lb()
-		self.client.wait_for_hot()
 		self.init_users()
 
 		self.client.metrics.session_start_time = time.time()
@@ -136,10 +132,9 @@ class Sim:
 		self.client.metrics.session_end_time = time.time()
 		self.client.metrics.print_metrics()
 		self.client.deconstruct()
-		self.client.shutdown_lb()
 
 def main():
-	sim = Sim(num_iters=20, base_num_users=100, base_rate=1.0 * (15 / 60), etime=2.0, streaming=True, backend="hf_tgi", model="vllm-13", manage=False)
+	sim = Sim(num_iters=50, base_num_users=1000, base_rate=1.0 * (15 / 60), etime=2.0, streaming=True, backend="hf_tgi", model="vllm-13", manage=False)
 	sim.run()
 
 if __name__ == "__main__":
